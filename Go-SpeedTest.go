@@ -2,19 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/inancgumus/screen"
 	"gopkg.in/ini.v1"
 )
-
 type AtomicCounter int64
 
 func (c *AtomicCounter) Write(p []byte) (n int, err error) {
@@ -30,7 +29,45 @@ func main() {
 		os.Exit(1)
 	}
 
-	url := cfg.Section("").Key("url").String()
+	// Load configurations
+	base_url := cfg.Section("").Key("base_url").String()
+	disableSSLVerification := cfg.Section("").Key("disable_ssl_verification").MustBool()
+	sslDomain := cfg.Section("").Key("ssl_domain").String()
+	hostDomain := cfg.Section("").Key("host_domain").String()
+	lockIP := cfg.Section("").Key("lock_ip").String()
+	lockPort := cfg.Section("").Key("lock_port").MustInt()
+	useHTTPS := cfg.Section("").Key("use_https").MustBool()
+
+    // Create a custom HTTP client
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", lockIP, lockPort))
+			if err != nil {
+				return nil, err
+			}
+			if useHTTPS {
+				cfg := &tls.Config{}
+				if disableSSLVerification {
+					cfg.InsecureSkipVerify = true
+				}
+				if sslDomain != "" {
+					cfg.ServerName = sslDomain
+				}
+				conn = tls.Client(conn, cfg)
+			}
+			return conn, nil
+		},
+	}
+	client := &http.Client{Transport: transport}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fmt.Printf("Failed to create request: %v\n", err)
+		os.Exit(1)
+	}
+	if hostDomain != "" {
+		req.Host = hostDomain
+	}
 
 	counter := new(AtomicCounter)
 
