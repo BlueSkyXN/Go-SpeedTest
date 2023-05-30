@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -32,13 +33,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Load configurations
 	base_url := cfg.Section("url").Key("base_url").String()
 	disableSSLVerification := cfg.Section("url").Key("disable_ssl_verification").MustBool()
 	sslDomain := cfg.Section("url").Key("ssl_domain").String()
 	hostDomain := cfg.Section("url").Key("host_domain").String()
-	lockIP := cfg.Section("url").Key("lock_ip").String()
-	lockPort := cfg.Section("url").Key("lock_port").MustInt()
-	useHTTPS := cfg.Section("url").Key("use_https").MustBool()
+	lockIP := cfg.Section("url").Key("locked_ip").String()
+	lockPort := cfg.Section("url").Key("locked_port").MustInt()
+
 
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
