@@ -40,13 +40,10 @@ jobs:
         run: |
           go mod download
           go mod tidy
-          ls -la
 
       - name: Build executable
         run: |
-               ls -la
                $env:GOOS="${{ matrix.build }}"; go build -o dist/${{ matrix.os }}/Go-SpeedTest ./Go-SpeedTest.go
-               ls -la
         shell: pwsh
 
 
