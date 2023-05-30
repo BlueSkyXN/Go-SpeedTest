@@ -39,7 +39,7 @@ func main() {
 	sslDomain := cfg.Section("url").Key("ssl_domain").String()
 	hostDomain := cfg.Section("url").Key("host_domain").String()
 	lockIP := cfg.Section("url").Key("locked_ip").String()
-	lockPort := cfg.Section("url").Key("locked_port").MustInt()
+	lockPort := cfg.Section("url").Key("locked_port").MustInt(443)
 
 	// Check if base_url uses https
 	useHTTPS := strings.HasPrefix(base_url, "https://")
@@ -63,6 +63,8 @@ func main() {
 	client := &http.Client{Transport: transport}
 
 	req, err := http.NewRequest("GET", base_url, nil)
+	fmt.Printf("Current request URL: %s\n", base_url)
+
 	if err != nil {
 		fmt.Printf("Failed to create request: %v\n", err)
 		os.Exit(1)
