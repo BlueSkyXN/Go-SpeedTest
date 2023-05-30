@@ -41,6 +41,8 @@ func main() {
 	lockIP := cfg.Section("url").Key("locked_ip").String()
 	lockPort := cfg.Section("url").Key("locked_port").MustInt()
 
+	// Check if base_url uses https
+	useHTTPS := strings.HasPrefix(base_url, "https://")
 
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
@@ -49,12 +51,9 @@ func main() {
 				return nil, err
 			}
 			if useHTTPS {
-				cfg := &tls.Config{}
-				if disableSSLVerification {
-					cfg.InsecureSkipVerify = true
-				}
-				if sslDomain != "" {
-					cfg.ServerName = sslDomain
+				cfg := &tls.Config{
+					InsecureSkipVerify: disableSSLVerification,
+					ServerName:         sslDomain,
 				}
 				conn = tls.Client(conn, cfg)
 			}
