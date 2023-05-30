@@ -6,12 +6,10 @@ import (
 	"net/http"
 	"os"
 	"sync/atomic"
-	"time"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
+	"gioui.org/app"
+	"gioui.org/layout"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
 	"gopkg.in/ini.v1"
 )
 
@@ -23,8 +21,16 @@ func (c *AtomicCounter) Write(p []byte) (n int, err error) {
 	return
 }
 
+func averageSpeed(ringBuffer []float64, currentIndex, seconds int) float64 {
+	start := (currentIndex + 1 + 60 - seconds) % 60
+	total := 0.0
+	for i := 0; i < seconds; i++ {
+		total += ringBuffer[(start+i)%60]
+	}
+	return total / float64(seconds)
+}
+
 func main() {
-	os.Setenv("FYNE_CANVAS", "software")
 	cfg, err := ini.Load("config.ini")
 	if err != nil {
 		fmt.Printf("Fail to read file: %v", err)
@@ -38,32 +44,64 @@ func main() {
 	ringBuffer := make([]float64, 60)
 	index := 0
 
-	fyneApp := app.New()
-	win := fyneApp.NewWindow("Speed Test")
-	label := widget.NewLabel("Loading...")
-	scrollContainer := container.NewVScroll(label)
-	win.SetContent(scrollContainer)
-	win.Resize(fyne.NewSize(600, 300))
-
+	// Create Gio app
 	go func() {
+		w := app.NewWindow(app.Size(unit.Dp(400), unit.Dp(200)))
+		th := material.NewTheme()
+
+		var mbpsLabel, avg3sLabel, avg10sLabel, avg60sLabel widget.Label
+		var ops op.Ops
+
 		for {
-			time.Sleep(time.Second)
+			e := <-w.Events()
 
-			Mbps := float64(atomic.LoadInt64((*int64)(counter)) * 8 / 1024 / 1024)
-			ringBuffer[index] = Mbps
+			switch e := e.(type) {
+			case system.DestroyEvent:
+				os.Exit(0)
+			case system.FrameEvent:
+				// Update data
+				Mbps := float64(atomic.LoadInt64((*int64)(counter)) * 8 / 1024 / 1024)
+				ringBuffer[index] = Mbps
+				avg3s := averageSpeed(ringBuffer, index, 3)
+				avg10s := averageSpeed(ringBuffer, index, 10)
+				avg60s := averageSpeed(ringBuffer, index, 60)
 
-			avg3s := averageSpeed(ringBuffer, index, 3)
-			avg10s := averageSpeed(ringBuffer, index, 10)
-			avg60s := averageSpeed(ringBuffer, index, 60)
+				// Clear the operations
+				ops.Reset()
 
-			text := fmt.Sprintf("| Time      | Current Speed | 3s Average | 10s Average | 60s Average |\n")
-			text += fmt.Sprintf("|-----------|---------------|------------|-------------|-------------|\n")
-			text += fmt.Sprintf("| %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
+				// Update labels
+				mbpsLabel.Text = fmt.Sprintf("Current Speed: %.2f Mbps", Mbps)
+				avg3sLabel.Text = fmt.Sprintf("3s Average: %.2f Mbps", avg3s)
+				avg10sLabel.Text = fmt.Sprintf("10s Average: %.2f Mbps", avg10s)
+				avg60sLabel.Text = fmt.Sprintf("60s Average: %.2f Mbps", avg60s)
 
-			label.SetText(text)
+				// Build the layout
+				layout.Flex{Axis: layout.Vertical}.Layout(&ops,
+					layout.Rigid(func() {
+						layout.Center.Layout(&ops, func() {
+							material.H1(th, mbpsLabel.Text).Layout(&ops)
+						})
+					}),
+					layout.Rigid(func() {
+						layout.Center.Layout(&ops, func() {
+							material.Body1(th, avg3sLabel.Text).Layout(&ops)
+						})
+					}),
+					layout.Rigid(func() {
+						layout.Center.Layout(&ops, func() {
+							material.Body1(th, avg10sLabel.Text).Layout(&ops)
+						})
+					}),
+					layout.Rigid(func() {
+						layout.Center.Layout(&ops, func() {
+							material.Body1(th, avg60sLabel.Text).Layout(&ops)
+						})
+					}),
+				)
 
-			atomic.StoreInt64((*int64)(counter), 0)
-			index = (index + 1) % 60
+				// Draw the operations
+				e.Frame(&ops)
+			}
 		}
 	}()
 
@@ -76,14 +114,5 @@ func main() {
 
 	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
 
-	win.ShowAndRun()
-}
-
-func averageSpeed(ringBuffer []float64, currentIndex, seconds int) float64 {
-	start := (currentIndex + 1 + 60 - seconds) % 60
-	total := 0.0
-	for i := 0; i < seconds; i++ {
-		total += ringBuffer[(start+i)%60]
-	}
-	return total / float64(seconds)
+	app.Main()
 }
