@@ -8,6 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/widget"
 	"gopkg.in/ini.v1"
 )
 
@@ -33,6 +37,13 @@ func main() {
 	ringBuffer := make([]float64, 60)
 	index := 0
 
+	fyneApp := app.New()
+	win := fyneApp.NewWindow("Speed Test")
+	label := widget.NewLabel("Loading...")
+	scrollContainer := container.NewVScroll(label)
+	win.SetContent(scrollContainer)
+	win.Resize(fyne.NewSize(600, 300))
+
 	go func() {
 		for {
 			time.Sleep(time.Second)
@@ -44,9 +55,11 @@ func main() {
 			avg10s := averageSpeed(ringBuffer, index, 10)
 			avg60s := averageSpeed(ringBuffer, index, 60)
 
-			fmt.Printf("| Time      | Current Speed | 3s Average | 10s Average | 60s Average |\n")
-			fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
-			fmt.Printf("| %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
+			text := fmt.Sprintf("| Time      | Current Speed | 3s Average | 10s Average | 60s Average |\n")
+			text += fmt.Sprintf("|-----------|---------------|------------|-------------|-------------|\n")
+			text += fmt.Sprintf("| %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
+
+			label.SetText(text)
 
 			atomic.StoreInt64((*int64)(counter), 0)
 			index = (index + 1) % 60
@@ -61,7 +74,7 @@ func main() {
 	defer res.Body.Close()
 
 	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
-
+	win.ShowAndRun()
 	for {
 	}
 }
