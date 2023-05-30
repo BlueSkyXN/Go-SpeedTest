@@ -43,7 +43,7 @@ jobs:
 
       - name: Build executable
         run: |
-               $env:GOOS="${{ matrix.build }}"; go build -o dist/${{ matrix.os }}/Go-SpeedTest ./Go-SpeedTest.go
+               $env:GOOS="${{ matrix.build }}"; go build -o dist/${{ matrix.os }}/GST.exe ./Go-SpeedTest.go
         shell: pwsh
 
 
