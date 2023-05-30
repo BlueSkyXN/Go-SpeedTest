@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -35,46 +32,16 @@ func main() {
 
 	// Load configurations
 	base_url := cfg.Section("url").Key("base_url").String()
-	disableSSLVerification := cfg.Section("url").Key("disable_ssl_verification").MustBool()
-	sslDomain := cfg.Section("url").Key("ssl_domain").String()
-	hostDomain := cfg.Section("url").Key("host_domain").String()
-	lockIP := cfg.Section("url").Key("locked_ip").String()
-	lockPort := cfg.Section("url").Key("locked_port").MustInt(443)
 
-	// Check if base_url uses https
-	useHTTPS := strings.HasPrefix(base_url, "https://")
-
-	transport := &http.Transport{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", lockIP, lockPort))
-			if err != nil {
-				return nil, err
-			}
-			if useHTTPS {
-				cfg := &tls.Config{
-					InsecureSkipVerify: disableSSLVerification,
-					ServerName:         sslDomain,
-				}
-				conn = tls.Client(conn, cfg)
-			}
-			return conn, nil
-		},
-	}
-	client := &http.Client{Transport: transport}
+	client := &http.Client{}
 
 	req, err := http.NewRequest("GET", base_url, nil)
-	fmt.Printf("Current request URL: %s\n", base_url)
-
 	if err != nil {
 		fmt.Printf("Failed to create request: %v\n", err)
 		os.Exit(1)
 	}
-	if hostDomain != "" {
-		req.Host = hostDomain
-	}
 
 	counter := new(AtomicCounter)
-
 	ringBuffer := make([]float64, 60)
 	index := 0
 
