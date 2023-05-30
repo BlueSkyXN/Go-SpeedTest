@@ -1,28 +1,62 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
 name: Go Building
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
+  build-Go-SpeedTest:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        build: [linux, windows]
+        include:
+          - build: linux
+            os: ubuntu-22.04
+          - build: windows
+            os: windows-2019
 
-  build:
-    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Set up Go
-      uses: actions/setup-go@v3
-      with:
-        go-version: 1.19
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: '1.16'
 
-    - name: Build
-      run: go build -v ./...
+      - name: Set commit message
+        id: set_commit
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-22.04" ]; then
+            echo "COMMIT_MESSAGE=$(git log --format=%B -1)" >> $GITHUB_ENV
+          elif [ "${{ matrix.os }}" == "windows-2019" ]; then
+            commit_message=$(git log --format=%B -1)
+            echo "COMMIT_MESSAGE=$commit_message" >> $GITHUB_ENV
+          fi
+        shell: bash
 
-    - name: Test
-      run: go test -v ./...
+      - name: Get dependencies
+        run: |
+          go mod download
+          go mod tidy
+
+      - name: Build executable
+        run: |
+          GOOS=${{ matrix.build }} go build -o dist/${{ matrix.os }}/Go-SpeedTest ./Go-SpeedTest.go
+
+      - name: Upload-ubuntu-22.04
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
+          path: dist/ubuntu-22.04/Go-SpeedTest
+
+      - name: Upload-windows-2019
+        if: ${{ matrix.os == 'windows-2019' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
+          path: dist/windows-2019/Go-SpeedTest.exe
