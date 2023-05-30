@@ -109,14 +109,21 @@ func main() {
 		}
 	}()
 
-	res, err := http.Get(url)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	defer res.Body.Close()
+	// Moved http request into the goroutine.
+	go func() {
+		res, err := http.Get(url)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		defer res.Body.Close()
 
-	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+		_, err = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}()
 
 	app.Main()
 }
