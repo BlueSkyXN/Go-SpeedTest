@@ -40,10 +40,13 @@ jobs:
         run: |
           go mod download
           go mod tidy
+          ls -la
 
       - name: Build executable
         run: |
+               ls -la
                $env:GOOS="${{ matrix.build }}"; go build -o dist/${{ matrix.os }}/Go-SpeedTest ./Go-SpeedTest.go
+               ls -la
         shell: pwsh
 
 
@@ -60,3 +63,10 @@ jobs:
         with:
           name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
           path: dist/windows-2019/Go-SpeedTest.exe
+          
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
+          path: dist/*
+
