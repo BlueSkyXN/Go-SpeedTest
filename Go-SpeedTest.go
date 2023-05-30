@@ -8,12 +8,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/inancgumus/screen"
 	"gopkg.in/ini.v1"
 )
+
 type AtomicCounter int64
 
 func (c *AtomicCounter) Write(p []byte) (n int, err error) {
@@ -29,16 +32,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load configurations
-	base_url := cfg.Section("").Key("base_url").String()
-	disableSSLVerification := cfg.Section("").Key("disable_ssl_verification").MustBool()
-	sslDomain := cfg.Section("").Key("ssl_domain").String()
-	hostDomain := cfg.Section("").Key("host_domain").String()
-	lockIP := cfg.Section("").Key("lock_ip").String()
-	lockPort := cfg.Section("").Key("lock_port").MustInt()
-	useHTTPS := cfg.Section("").Key("use_https").MustBool()
+	base_url := cfg.Section("url").Key("base_url").String()
+	disableSSLVerification := cfg.Section("url").Key("disable_ssl_verification").MustBool()
+	sslDomain := cfg.Section("url").Key("ssl_domain").String()
+	hostDomain := cfg.Section("url").Key("host_domain").String()
+	lockIP := cfg.Section("url").Key("lock_ip").String()
+	lockPort := cfg.Section("url").Key("lock_port").MustInt()
+	useHTTPS := cfg.Section("url").Key("use_https").MustBool()
 
-    // Create a custom HTTP client
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", lockIP, lockPort))
@@ -60,7 +61,7 @@ func main() {
 	}
 	client := &http.Client{Transport: transport}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", base_url, nil)
 	if err != nil {
 		fmt.Printf("Failed to create request: %v\n", err)
 		os.Exit(1)
@@ -105,22 +106,18 @@ func main() {
 	}()
 
 	go func() {
-		// 创建一个接收信号的 channel
 		c := make(chan os.Signal, 1)
-		// 监听所有信号
 		signal.Notify(c)
-		// 循环遍历 channel，进行处理
 		for s := range c {
 			if s == syscall.SIGINT {
 				fmt.Println("Caught signal SIGINT, stop downloading...")
-				// Call the cancel function to stop the download
 				cancel()
 				return
 			}
 		}
 	}()
 
-	res, err := http.Get(url)
+	res, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -128,6 +125,9 @@ func main() {
 	defer res.Body.Close()
 
 	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+
+	// Prevent the main function from exiting before the download is complete
+	<-ctx.Done()
 }
 
 func averageSpeed(ringBuffer []float64, currentIndex, seconds int) float64 {
