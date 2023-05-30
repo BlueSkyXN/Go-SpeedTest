@@ -5,6 +5,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -23,10 +26,21 @@ func (c *AtomicCounter) Value() int64 {
 	return atomic.LoadInt64(&c.val)
 }
 
-// This method makes AtomicCounter an io.Writer.
 func (c *AtomicCounter) Write(p []byte) (n int, err error) {
 	c.Add(int64(len(p)))
 	return len(p), nil
+}
+
+func clear() {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/c", "cls")
+		cmd.Stdout = os.Stdout
+		cmd.Run()
+	} else {
+		cmd := exec.Command("clear")
+		cmd.Stdout = os.Stdout
+		cmd.Run()
+	}
 }
 
 func main() {
@@ -41,9 +55,12 @@ func main() {
 
 	go func() {
 		for {
-			time.Sleep(1 * time.Second)
-			fmt.Printf("Current speed: %d bytes/second\n", counter.Value())
+			clear()
+			fmt.Printf("%-10s %-8s %-8s\n", "Time", "MBps", "Mbps")
+			bytesPerSecond := counter.Value()
+			fmt.Printf("%s %-8.2f %-8.2f\n", time.Now().Format("15:04:05"), float64(bytesPerSecond)/(1024*1024), float64(bytesPerSecond)*8/(1000*1000))
 			counter.Add(-counter.Value()) // Reset counter
+			time.Sleep(1 * time.Second)
 		}
 	}()
 
