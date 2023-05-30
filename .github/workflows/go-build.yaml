@@ -11,10 +11,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [linux, windows]
+        build: [windows]
         include:
-          - build: linux
-            os: ubuntu-22.04
           - build: windows
             os: windows-2019
 
