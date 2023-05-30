@@ -24,6 +24,7 @@ func (c *AtomicCounter) Write(p []byte) (n int, err error) {
 }
 
 func main() {
+	os.Setenv("FYNE_CANVAS", "software")
 	cfg, err := ini.Load("config.ini")
 	if err != nil {
 		fmt.Printf("Fail to read file: %v", err)
@@ -74,9 +75,8 @@ func main() {
 	defer res.Body.Close()
 
 	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+
 	win.ShowAndRun()
-	for {
-	}
 }
 
 func averageSpeed(ringBuffer []float64, currentIndex, seconds int) float64 {
