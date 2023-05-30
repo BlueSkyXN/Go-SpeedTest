@@ -57,9 +57,9 @@ func main() {
 				screen.Clear()
 				screen.MoveTopLeft()
 
-				fmt.Printf("| Time      | Current Speed | 3s Average | 10s Average | 60s Average |\n")
+				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average |\n")
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
-				fmt.Printf("| %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
+				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
 
 				atomic.StoreInt64((*int64)(counter), 0)
 				index = (index + 1) % 60
