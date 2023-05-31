@@ -11,11 +11,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [windows]
+        build: [linux, windows]
         include:
+          - build: linux
+            os: ubuntu-22.04
           - build: windows
             os: windows-2019
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -43,7 +44,7 @@ jobs:
 
       - name: Build executable
         run: |
-               $env:GOOS="${{ matrix.build }}"; go build -o dist/${{ matrix.os }}/GST.exe ./Go-SpeedTest.go
+               $env:GOOS="${{ matrix.build }}"; go build -o dist/${{ matrix.os }}/GST.exe ./...
         shell: pwsh
 
 
