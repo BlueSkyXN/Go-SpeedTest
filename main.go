@@ -201,10 +201,13 @@ func main() {
 					avg60s := averageSpeed(connInfo.RingBuffer, connInfo.CurrentRing, 60)
 					fmt.Printf("|  %d  | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", i+1, connInfo.Speed, avg3s, avg10s, avg60s)
 
-					connInfos[i].Speed = float64(atomic.LoadInt64((*int64)(connInfo.Counter))) / (1024 * 1024)
-					connInfos[i].RingBuffer[connInfos[i].CurrentRing] = connInfos[i].Speed
-					connInfos[i].CurrentRing = (connInfos[i].CurrentRing + 1) % len(connInfos[i].RingBuffer)
-					atomic.StoreInt64((*int64)(connInfo.Counter), 0)
+					if connInfos[i].Counter != nil {
+						connInfos[i].Speed = float64(atomic.LoadInt64((*int64)(connInfos[i].Counter))) / (1024 * 1024)
+						connInfos[i].RingBuffer[connInfos[i].CurrentRing] = connInfos[i].Speed
+						connInfos[i].CurrentRing = (connInfos[i].CurrentRing + 1) % len(connInfos[i].RingBuffer)
+						atomic.StoreInt64((*int64)(connInfos[i].Counter), 0)
+					}
+
 				}
 
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
@@ -219,13 +222,19 @@ func main() {
 func averageSpeed(ringBuffer []float64, currentRing, period int) float64 {
 	count := 0
 	total := 0.0
+	if period > currentRing {
+		period = currentRing
+	}
 	for i := currentRing - period; i < currentRing; i++ {
-		index := i
-		if index < 0 {
-			index += len(ringBuffer)
-		}
+		index := ((i % len(ringBuffer)) + len(ringBuffer)) % len(ringBuffer)
 		total += ringBuffer[index]
 		count++
 	}
+
+	// Prevent division by zero
+	if count == 0 {
+		return 0
+	}
+
 	return total / float64(count)
 }
