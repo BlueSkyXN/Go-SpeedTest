@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -39,7 +40,7 @@ func main() {
 	cfg, err := ini.Load("config.ini")
 	if err != nil {
 		fmt.Printf("Fail to read file: %v", err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	// Load configurations
@@ -54,17 +55,9 @@ func main() {
 		u, err := url.Parse(base_url)
 		if err != nil {
 			fmt.Printf("Failed to parse base URL: %v\n", err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 		host_domain = u.Host
-	}
-
-	if lock_port == "" {
-		if strings.HasPrefix(base_url, "https://") {
-			lock_port = "443"
-		} else {
-			lock_port = "80"
-		}
 	}
 
 	if lock_port == "" {
@@ -115,7 +108,7 @@ func main() {
 	req, err := http.NewRequest("GET", base_url, nil)
 	if err != nil {
 		fmt.Printf("Failed to create request: %v\n", err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	// If the server requires the Host field, set the Host field of the request header
@@ -130,16 +123,6 @@ func main() {
 		Transport: transport,
 	}
 
-	req, err = http.NewRequest("GET", base_url, nil)
-	if err != nil {
-		fmt.Printf("Failed to create request: %v\n", err)
-		os.Exit(1)
-	}
-
-	// If the server requires the Host field, set the Host field of the request header
-	if ssl_domain != "" {
-		req.Host = ssl_domain
-	}
 	// Save request info for later display
 	reqInfo := requestInfo{
 		protocol:   req.URL.Scheme,
@@ -206,7 +189,7 @@ func main() {
 	res, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 	defer res.Body.Close()
 
