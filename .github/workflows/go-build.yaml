@@ -12,11 +12,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: linux-amd64
-            os: ubuntu-22.04
+          - os: ubuntu-22.04
+            GOOS: linux
+            GOARCH: amd64
             ext: ''
-          - build: windows-amd64
-            os: windows-2019
+          - os: windows-2019
+            GOOS: windows
+            GOARCH: amd64
             ext: '.exe'
     steps:
       - name: Checkout code
@@ -41,8 +43,8 @@ jobs:
 
       - name: Build executable
         run: |
-          echo "GOOS=${{ matrix.build.split('-')[0] }}" >> $GITHUB_ENV
-          echo "GOARCH=${{ matrix.build.split('-')[1] }}" >> $GITHUB_ENV
+          echo "GOOS=${{ matrix.GOOS }}" >> $GITHUB_ENV
+          echo "GOARCH=${{ matrix.GOARCH }}" >> $GITHUB_ENV
           go build -o dist/${{ matrix.os }}/Go-SpeedTest${{ matrix.ext }} ./...
         shell: bash
 
