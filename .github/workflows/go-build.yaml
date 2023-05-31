@@ -45,11 +45,11 @@ jobs:
         run: |
           echo "GOOS=${{ matrix.GOOS }}" >> $GITHUB_ENV
           echo "GOARCH=${{ matrix.GOARCH }}" >> $GITHUB_ENV
-          go build -o dist/${{ matrix.os }}/Go-SpeedTest${{ matrix.ext }} ./...
+          go build -o dist/${{ matrix.os }}/GST${{ matrix.ext }} ./...
         shell: bash
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
-          path: dist/${{ matrix.os }}/Go-SpeedTest${{ matrix.ext }}
+          path: dist/${{ matrix.os }}/
