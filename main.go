@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -32,13 +36,83 @@ func main() {
 
 	// Load configurations
 	base_url := cfg.Section("url").Key("base_url").String()
+	disable_ssl_verification := cfg.Section("url").Key("disable_ssl_verification").MustBool()
+	ssl_domain := cfg.Section("url").Key("ssl_domain").String()
+	host_domain := cfg.Section("url").Key("host_domain").String()
+	lock_ip := cfg.Section("url").Key("lock_ip").String()
+	lock_port := cfg.Section("url").Key("lock_port").String()
 
-	client := &http.Client{}
+	if host_domain == "" {
+		u, err := url.Parse(base_url)
+		if err != nil {
+			fmt.Printf("Failed to parse base URL: %v\n", err)
+			os.Exit(1)
+		}
+		host_domain = u.Host
+	}
+
+	if lock_port == "" {
+		if strings.HasPrefix(base_url, "https://") {
+			lock_port = "443"
+		} else {
+			lock_port = "80"
+		}
+	}
+
+	if lock_port == "" {
+		if strings.HasPrefix(base_url, "https://") {
+			lock_port = "443"
+		} else {
+			lock_port = "80"
+		}
+	}
+
+	// Custom DialContext
+	dialContext := (&net.Dialer{}).DialContext
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+
+			if host == host_domain {
+				if lock_ip != "" {
+					addr = lock_ip + ":" + lock_port
+				} else {
+					// Resolve DNS and use the first IP
+					ips, err := net.LookupIP(host)
+					if err != nil {
+						return nil, err
+					}
+					if len(ips) == 0 {
+						return nil, fmt.Errorf("no IPs found for host: %s", host)
+					}
+					addr = ips[0].String() + ":" + lock_port
+				}
+			}
+			return dialContext(ctx, network, addr)
+		},
+	}
+
+	// If set to true, SSL certificate verification will be disabled
+	if disable_ssl_verification {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
 
 	req, err := http.NewRequest("GET", base_url, nil)
 	if err != nil {
 		fmt.Printf("Failed to create request: %v\n", err)
 		os.Exit(1)
+	}
+
+	// If the server requires the Host field, set the Host field of the request header
+	if ssl_domain != "" {
+		req.Host = ssl_domain
 	}
 
 	counter := new(AtomicCounter)
