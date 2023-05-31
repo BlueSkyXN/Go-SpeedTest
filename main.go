@@ -109,50 +109,24 @@ func main() {
 			dialContext := (&net.Dialer{}).DialContext
 			transport := &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					host, _, err := net.SplitHostPort(addr)
-					if err != nil {
-						return nil, err
-					}
-
-					if host == hostDomain {
-						if lockIP != "" {
-							addr = lockIP + ":" + lockPort
-						} else {
-							// Resolve DNS and use the first IP
-							ips, err := net.LookupIP(host)
-							if err != nil {
-								return nil, err
-							}
-							if len(ips) == 0 {
-								return nil, fmt.Errorf("no IPs found for host: %s", host)
-							}
-							addr = ips[0].String() + ":" + lockPort
-						}
-					}
-					return dialContext(ctx, network, addr)
+					return dialContext(ctx, network, lockIP+":"+lockPort)
+				},
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: disableSSLVerification,
+					ServerName:         sslDomain,
 				},
 			}
+			client := &http.Client{Transport: transport}
 
-			// If set to true, SSL certificate verification will be disabled
-			if disableSSLVerification {
-				transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-			}
-
-			client := &http.Client{
-				Transport: transport,
-			}
-
-			req, err := http.NewRequest("GET", baseURL, nil)
+			// Build Request
+			req, err := http.NewRequestWithContext(ctx, "GET", baseURL, nil)
 			if err != nil {
-				fmt.Printf("Failed to create request: %v\n", err)
+				fmt.Println(err)
 				os.Exit(1)
 			}
+			req.Host = hostDomain
 
-			// If the server requires the Host field, set the Host field of the request header
-			if sslDomain != "" {
-				req.Host = sslDomain
-			}
-
+			// Send Request
 			res, err := client.Do(req)
 			if err != nil {
 				fmt.Println(err)
@@ -160,10 +134,10 @@ func main() {
 			}
 			defer res.Body.Close()
 
+			// Process Response
 			_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
 
 			// Save connection info for later display
-
 			connInfos[index] = ConnectionInfo{
 				Index:       index,
 				Protocol:    req.URL.Scheme,
@@ -171,12 +145,12 @@ func main() {
 				IP:          lockIP,
 				Port:        lockPort,
 				Path:        req.URL.Path,
-				Speed:       float64(atomic.LoadInt64((*int64)(counter))) / (1024 * 1024),
-				RingBuffer:  ringBuffer,
-				CurrentRing: 0,
-				Counter:     counter, // Add this line
+				Counter:     counter,
+				Speed:       connInfos[index].Speed, // use calculated speed
+				RingBuffer:  connInfos[index].RingBuffer,
+				CurrentRing: connInfos[index].CurrentRing,
 			}
-			atomic.StoreInt64((*int64)(counter), 0)
+			fmt.Println("Download finished for connection", index)
 		}(i)
 	}
 
@@ -195,21 +169,17 @@ func main() {
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
 				totalSpeed := 0.0
 				for i, connInfo := range connInfos {
-					totalSpeed += connInfo.Speed
+					currentSpeed := float64(atomic.LoadInt64((*int64)(connInfo.Counter))) / (1024 * 1024)
+					connInfo.RingBuffer[connInfo.CurrentRing] = currentSpeed
+					connInfo.CurrentRing = (connInfo.CurrentRing + 1) % len(connInfo.RingBuffer)
+					atomic.StoreInt64((*int64)(connInfo.Counter), 0)
+
 					avg3s := averageSpeed(connInfo.RingBuffer, connInfo.CurrentRing, 3)
 					avg10s := averageSpeed(connInfo.RingBuffer, connInfo.CurrentRing, 10)
 					avg60s := averageSpeed(connInfo.RingBuffer, connInfo.CurrentRing, 60)
-					fmt.Printf("|  %d  | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", i+1, connInfo.Speed, avg3s, avg10s, avg60s)
-
-					if connInfos[i].Counter != nil {
-						connInfos[i].Speed = float64(atomic.LoadInt64((*int64)(connInfos[i].Counter))) / (1024 * 1024)
-						connInfos[i].RingBuffer[connInfos[i].CurrentRing] = connInfos[i].Speed
-						connInfos[i].CurrentRing = (connInfos[i].CurrentRing + 1) % len(connInfos[i].RingBuffer)
-						atomic.StoreInt64((*int64)(connInfos[i].Counter), 0)
-					}
-
+					fmt.Printf("|  %d  | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", i+1, currentSpeed, avg3s, avg10s, avg60s)
+					totalSpeed += currentSpeed
 				}
-
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
 				fmt.Printf("Total Speed: %.2f MB/s\n", totalSpeed)
 			}
@@ -217,13 +187,14 @@ func main() {
 	}()
 
 	wg.Wait()
+
 }
 
 func averageSpeed(ringBuffer []float64, currentRing, period int) float64 {
 	count := 0
 	total := 0.0
-	if period > currentRing {
-		period = currentRing
+	if period > len(ringBuffer) {
+		period = len(ringBuffer)
 	}
 	for i := currentRing - period; i < currentRing; i++ {
 		index := ((i % len(ringBuffer)) + len(ringBuffer)) % len(ringBuffer)
