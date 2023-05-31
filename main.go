@@ -21,6 +21,14 @@ import (
 
 type AtomicCounter int64
 
+type requestInfo struct {
+	protocol   string
+	hostDomain string
+	ip         string
+	port       string
+	path       string
+}
+
 func (c *AtomicCounter) Write(p []byte) (n int, err error) {
 	n = len(p)
 	atomic.AddInt64((*int64)(c), int64(n))
@@ -118,6 +126,32 @@ func main() {
 	counter := new(AtomicCounter)
 	ringBuffer := make([]float64, 60)
 	index := 0
+	client = &http.Client{
+		Transport: transport,
+	}
+
+	req, err = http.NewRequest("GET", base_url, nil)
+	if err != nil {
+		fmt.Printf("Failed to create request: %v\n", err)
+		os.Exit(1)
+	}
+
+	// If the server requires the Host field, set the Host field of the request header
+	if ssl_domain != "" {
+		req.Host = ssl_domain
+	}
+	// Save request info for later display
+	reqInfo := requestInfo{
+		protocol:   req.URL.Scheme,
+		hostDomain: req.Host,
+		ip:         lock_ip,
+		port:       lock_port,
+		path:       req.URL.Path,
+	}
+
+	counter = new(AtomicCounter)
+	ringBuffer = make([]float64, 60)
+	index = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -144,6 +178,12 @@ func main() {
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
 				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
+				fmt.Printf("\nRequest Info:\n")
+				fmt.Printf("Protocol: %s\n", reqInfo.protocol)
+				fmt.Printf("Host-Domain: %s\n", reqInfo.hostDomain)
+				fmt.Printf("IP: %s\n", reqInfo.ip)
+				fmt.Printf("Port: %s\n", reqInfo.port)
+				fmt.Printf("Path: %s\n", reqInfo.path)
 
 				atomic.StoreInt64((*int64)(counter), 0)
 				index = (index + 1) % 60
