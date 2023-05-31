@@ -11,12 +11,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [linux, windows]
         include:
-          - build: linux
+          - build: linux-amd64
             os: ubuntu-22.04
-          - build: windows
+            ext: ''
+          - build: windows-amd64
             os: windows-2019
+            ext: '.exe'
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -29,12 +30,8 @@ jobs:
       - name: Set commit message
         id: set_commit
         run: |
-          if [ "${{ matrix.os }}" == "ubuntu-22.04" ]; then
-            echo "COMMIT_MESSAGE=$(git log --format=%B -1)" >> $GITHUB_ENV
-          elif [ "${{ matrix.os }}" == "windows-2019" ]; then
-            commit_message=$(git log --format=%B -1)
-            echo "COMMIT_MESSAGE=$commit_message" >> $GITHUB_ENV
-          fi
+          commit_message=$(git log --format=%B -1)
+          echo "COMMIT_MESSAGE=$commit_message" >> $GITHUB_ENV
         shell: bash
 
       - name: Get dependencies
@@ -44,27 +41,13 @@ jobs:
 
       - name: Build executable
         run: |
-               $env:GOOS="${{ matrix.build }}"; go build -o dist/${{ matrix.os }}/GST.exe ./...
-        shell: pwsh
+          echo "GOOS=${{ matrix.build.split('-')[0] }}" >> $GITHUB_ENV
+          echo "GOARCH=${{ matrix.build.split('-')[1] }}" >> $GITHUB_ENV
+          go build -o dist/${{ matrix.os }}/Go-SpeedTest${{ matrix.ext }} ./...
+        shell: bash
 
-
-      - name: Upload-ubuntu-22.04
-        if: ${{ matrix.os == 'ubuntu-22.04' }}
-        uses: actions/upload-artifact@v3
-        with:
-          name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
-          path: dist/ubuntu-22.04/Go-SpeedTest
-
-      - name: Upload-windows-2019
-        if: ${{ matrix.os == 'windows-2019' }}
-        uses: actions/upload-artifact@v3
-        with:
-          name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
-          path: dist/windows-2019/Go-SpeedTest.exe
-          
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
-          path: dist/*
-
+          path: dist/${{ matrix.os }}/Go-SpeedTest${{ matrix.ext }}
