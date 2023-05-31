@@ -103,7 +103,7 @@ func main() {
 
 			// 创建一个新的AtomicCounter和ringBuffer来追踪这个连接的速度
 			counter := new(AtomicCounter)
-			ringBuffer := make([]float64, 60)
+			//ringBuffer := make([]float64, 60)
 
 			// Custom DialContext
 			dialContext := (&net.Dialer{}).DialContext
