@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -43,7 +44,10 @@ var (
 )
 
 func main() {
-	cfg, err := ini.Load("config.ini")
+	configPath := flag.String("c", "config.ini", "Path to the configuration file")
+	flag.Parse()
+
+	cfg, err := ini.Load(*configPath)
 	if err != nil {
 		fmt.Printf("Fail to read file: %v", err)
 		log.Fatal(err)
