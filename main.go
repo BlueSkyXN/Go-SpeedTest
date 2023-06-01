@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -61,7 +62,10 @@ func main() {
 	var maxIdleConnsPerHost int
 	var maxConnsPerHost int
 
-	if connections == "auto" || connections == "0" {
+	// Validate connections value
+	validConnections := regexp.MustCompile(`^\d+$`).MatchString
+	if !validConnections(connections) {
+		fmt.Printf("Invalid connections value: %s. Defaulting to auto.\n", connections)
 		maxIdleConnsPerHost = 0
 		maxConnsPerHost = 0
 	} else {
@@ -103,10 +107,7 @@ func main() {
 				if lockIP != "" {
 					addr = lockIP + ":" + lockPort
 				} else {
-					ctx, cancel := context.WithTimeout(ctx, 2*time.Second) // 设置超时时间
-					defer cancel()
-
-					ips, err := net.LookupIPContext(ctx, host)
+					ips, err := net.LookupIP(host)
 					if err != nil {
 						return nil, err
 					}
@@ -123,7 +124,7 @@ func main() {
 	}
 
 	// Update MaxIdleConnsPerHost dynamically
-	atomic.StoreInt(&transport.MaxIdleConnsPerHost, maxIdleConnsPerHost)
+	transport.MaxIdleConnsPerHost = maxIdleConnsPerHost
 
 	// If set to true, SSL certificate verification will be disabled
 	if disableSSLVerification {
