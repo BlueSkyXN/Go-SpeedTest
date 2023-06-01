@@ -76,6 +76,13 @@ func main() {
 		}
 	}
 
+	totalFileSizeMB := cfg.Section("url").Key("total_file_size").MustInt(500)
+	totalFileSize := totalFileSizeMB * 1024 * 1024
+	if err != nil {
+		fmt.Printf("Invalid total file size: %s. Please check the configuration.\n", totalFileSizeStr)
+		log.Fatal(err)
+	}
+
 	if hostDomain == "" {
 		u, err := url.Parse(baseURL)
 		if err != nil {
@@ -173,21 +180,28 @@ func main() {
 			default:
 				time.Sleep(time.Second)
 
-				Mbps := float64(counter.Read()*8) / (1024 * 1024)
+				bytesDownloaded := counter.Read()
+				Mbps := float64(bytesDownloaded*8) / (1024 * 1024)
 				ringBuffer[currentIndex] = Mbps
 
 				avg3s := averageSpeed(ringBuffer, currentIndex, bufferSize, 3)
 				avg10s := averageSpeed(ringBuffer, currentIndex, bufferSize, 10)
 				avg60s := averageSpeed(ringBuffer, currentIndex, bufferSize, seconds)
 
+				elapsedTime := time.Since(startTime)
+				estimatedDownloadTime := "N/A"
+				if Mbps > 0 {
+					estimatedDownloadTime = fmt.Sprintf("%.2fs", float64(totalFileSize)/(Mbps*1024*1024/8))
+				}
+
 				screen.Clear()
 				screen.MoveTopLeft()
 
-				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
-				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average |\n")
-				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
-				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
-				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
+				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|-----------------|----------------|\n")
+				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average | Elapsed Time | Estimated Time  | Downloaded Size|\n")
+				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|-----------------|----------------|\n")
+				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f | %-13s | %-15s | %-14d |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s, elapsedTime, estimatedDownloadTime, bytesDownloaded)
+				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|-----------------|----------------|\n")
 				fmt.Printf("\nRequest Info:\n")
 				fmt.Printf("Protocol: %s\n", req.URL.Scheme)
 				fmt.Printf("Host-Domain: %s\n", hostDomain)
