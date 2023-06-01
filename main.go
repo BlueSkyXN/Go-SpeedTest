@@ -189,7 +189,7 @@ func main() {
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
 				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average |   Test TIME   | Downloaded Size|\n")
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
-				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f | %13d | %11.2f MB |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s, int(elapsedTime.Seconds()), float64(bytesDownloaded)/(1024*1024))
+				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f | %13d | %11.2f MB | %11.2f MB |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s, int(elapsedTime.Seconds()), float64(bytesDownloaded)/(1024*1024), float64(counter.Read())/(1024*1024))
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
 				fmt.Printf("\nRequest Info:\n")
 				fmt.Printf("Protocol: %s\n", req.URL.Scheme)
@@ -198,7 +198,7 @@ func main() {
 				fmt.Printf("Port: %s\n", lockPort)
 				fmt.Printf("Path: %s\n", req.URL.Path)
 
-				atomic.StoreInt64((*int64)(counter), 0)
+			
 				currentIndex = (currentIndex + 1) % bufferSize
 
 				if !infiniteTest && time.Since(startTime) >= testDuration {
