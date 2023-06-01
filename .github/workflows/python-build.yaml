@@ -1,11 +1,12 @@
 name: Python Building
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-
+  # 定义文件触发器
+  push:
+    paths:
+      - 'start/preset_plans.py'
+      - 'start/quick-start.py'
 jobs:
   build-quick-start:
     runs-on: ${{ matrix.os }}
