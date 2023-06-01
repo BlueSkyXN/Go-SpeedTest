@@ -9,9 +9,25 @@ class ConfigEditor(QWidget):
     def __init__(self, parent=None):
         super(ConfigEditor, self).__init__(parent)
         
+        # Default config to be used if keys are missing
+        default_config = {
+            'url': {
+                'base_url': 'https://speed.cloudflare.com/__down?bytes=500000000',
+                'disable_ssl_verification': 'true',
+                'ssl_domain': 'speed.cloudflare.com',
+                'host_domain': 'speed.cloudflare.com',
+                'lock_ip': '104.27.88.88',
+                'lock_port': '443',
+            },
+            'Speed': {
+                'connections': '8',
+                'test_duration': '60',
+            }
+        }
+
         # Load preset plans from preset_plans.py
         self.configs = {
-            str(i): preset_plans.get_plan(i) for i in range(len(preset_plans.plans))
+            str(i): {section: {key: values.get(key, default_config[section].get(key, '')) for key in default_config[section].keys()} for section, values in preset_plans.get_plan(i).items()} for i in range(len(preset_plans.plans))
         }
 
         # Check if config.ini exists, if not create it with Plan 0

@@ -17,11 +17,9 @@ plans = [
     {
         'url': {
             'base_url': 'https://speed.cloudflare.com/__down?bytes=400000000',
-            'disable_ssl_verification': 'true',
             'ssl_domain': 'speed.cloudflare.com',
             'host_domain': 'speed.cloudflare.com',
             'lock_ip': '104.27.200.70',
-            'lock_port': '443',
         },
         'Speed': {
             'connections': '10',
