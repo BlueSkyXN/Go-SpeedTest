@@ -189,19 +189,15 @@ func main() {
 				avg60s := averageSpeed(ringBuffer, currentIndex, bufferSize, seconds)
 
 				elapsedTime := time.Since(startTime)
-				estimatedDownloadTime := "N/A"
-				if Mbps > 0 {
-					estimatedDownloadTime = fmt.Sprintf("%.2fs", float64(totalFileSize)/(Mbps*1024*1024/8))
-				}
 
 				screen.Clear()
 				screen.MoveTopLeft()
 
-				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|-----------------|----------------|\n")
-				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average | Elapsed Time | Estimated Time  | Downloaded Size|\n")
-				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|-----------------|----------------|\n")
-				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f | %-13s | %-15s | %-14d |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s, elapsedTime, estimatedDownloadTime, bytesDownloaded)
-				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|-----------------|----------------|\n")
+				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
+				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average | Elapsed Time  | Downloaded Size|\n")
+				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
+				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f | %-13s | %-14d |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s, elapsedTime, bytesDownloaded)
+				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
 				fmt.Printf("\nRequest Info:\n")
 				fmt.Printf("Protocol: %s\n", req.URL.Scheme)
 				fmt.Printf("Host-Domain: %s\n", hostDomain)
