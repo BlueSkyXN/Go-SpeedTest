@@ -21,19 +21,22 @@ import (
 	"gopkg.in/ini.v1"
 )
 
-type AtomicCounter struct {
-	count int64
-}
+type AtomicCounter int64
 
 func (c *AtomicCounter) Write(p []byte) (n int, err error) {
 	n = len(p)
-	atomic.AddInt64(&c.count, int64(n))
+	atomic.AddInt64((*int64)(c), int64(n))
 	return
 }
 
 func (c *AtomicCounter) Read() int64 {
-	return atomic.LoadInt64(&c.count)
+	return atomic.LoadInt64((*int64)(c))
 }
+
+var (
+	currentIndex int
+	seconds      int = 60
+)
 
 func main() {
 	cfg, err := ini.Load("config.ini")
@@ -59,7 +62,6 @@ func main() {
 		maxIdleConnsPerHost = 0
 		maxConnsPerHost = 0
 	} else {
-		var err error
 		maxIdleConnsPerHost, err = strconv.Atoi(connections)
 		if err != nil {
 			fmt.Printf("Invalid connections value: %s. Defaulting to auto.\n", connections)
@@ -114,6 +116,9 @@ func main() {
 		MaxConnsPerHost:     maxConnsPerHost,
 	}
 
+	// Update MaxIdleConnsPerHost dynamically
+	transport.MaxIdleConnsPerHost = maxIdleConnsPerHost
+
 	// If set to true, SSL certificate verification will be disabled
 	if disableSSLVerification {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -134,11 +139,9 @@ func main() {
 		req.Host = sslDomain
 	}
 
-	counter := &AtomicCounter{}
-	ringBufferSize := 60
-	ringBuffer := make([]float64, ringBufferSize)
-	currentIndex := 0
-	seconds := 60
+	counter := new(AtomicCounter)
+	bufferSize := 60
+	ringBuffer := make([]float64, bufferSize)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -153,9 +156,9 @@ func main() {
 				Mbps := float64(counter.Read()*8) / (1024 * 1024)
 				ringBuffer[currentIndex] = Mbps
 
-				avg3s := averageSpeed(ringBuffer, currentIndex, seconds, 3)
-				avg10s := averageSpeed(ringBuffer, currentIndex, seconds, 10)
-				avg60s := averageSpeed(ringBuffer, currentIndex, seconds, 60)
+				avg3s := averageSpeed(ringBuffer, currentIndex, bufferSize, 3)
+				avg10s := averageSpeed(ringBuffer, currentIndex, bufferSize, 10)
+				avg60s := averageSpeed(ringBuffer, currentIndex, bufferSize, 60)
 
 				screen.Clear()
 				screen.MoveTopLeft()
@@ -172,8 +175,8 @@ func main() {
 				fmt.Printf("Port: %s\n", lockPort)
 				fmt.Printf("Path: %s\n", req.URL.Path)
 
-				counter.Write([]byte{})
-				currentIndex = (currentIndex + 1) % ringBufferSize
+				atomic.StoreInt64((*int64)(counter), 0)
+				currentIndex = (currentIndex + 1) % bufferSize
 			}
 		}
 	}()
@@ -196,9 +199,6 @@ func main() {
 	defer res.Body.Close()
 
 	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
-
-	// Close http client
-	client.CloseIdleConnections()
 
 	// Prevent the main function from exiting before the download is complete
 	<-ctx.Done()
