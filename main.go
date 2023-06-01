@@ -77,7 +77,6 @@ func main() {
 	}
 
 	totalFileSizeMB := cfg.Section("url").Key("total_file_size").MustInt(500)
-	//totalFileSize := totalFileSizeMB * 1024 * 1024
 	if err != nil {
 		fmt.Printf("Invalid total file size: %d. Please check the configuration.\n", totalFileSizeMB)
 		log.Fatal(err)
@@ -171,6 +170,7 @@ func main() {
 	}
 
 	go func() {
+
 		startTime = time.Now()
 
 		for {
@@ -227,16 +227,23 @@ func main() {
 		}
 	}()
 
-	res, err := client.Do(req)
-	if err != nil {
-		fmt.Println(err)
-		log.Fatal(err)
-	}
-	defer res.Body.Close()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				res, err := client.Do(req)
+				if err != nil {
+					fmt.Println(err)
+					log.Fatal(err)
+				}
+				_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+				res.Body.Close()
+			}
+		}
+	}()
 
-	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
-
-	// Prevent the main function from exiting before the download is complete
 	<-ctx.Done()
 }
 
