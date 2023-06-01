@@ -22,3 +22,10 @@ go.work
 config.ini
 *.bak
 config-bak.ini
+
+
+#Python
+
+dist/
+build/
+*.spec
