@@ -11,12 +11,12 @@ class ConfigEditor(QWidget):
         
         # Load preset plans from preset_plans.py
         self.configs = {
-            name: getattr(preset_plans, name)() for name, obj in inspect.getmembers(preset_plans) if inspect.isfunction(obj)
+            str(i): preset_plans.get_plan(i) for i in range(len(preset_plans.plans))
         }
 
         # Check if config.ini exists, if not create it with Plan 0
         if not os.path.exists('config.ini'):
-            self.save_config_to_file('plan0')
+            self.save_config_to_file('0')
         else:
             shutil.copy2('config.ini', 'config-bak.ini')
 
