@@ -21,12 +21,18 @@ import (
 	"gopkg.in/ini.v1"
 )
 
-type AtomicCounter int64
+type AtomicCounter struct {
+	count int64
+}
 
 func (c *AtomicCounter) Write(p []byte) (n int, err error) {
 	n = len(p)
-	atomic.AddInt64((*int64)(c), int64(n))
+	atomic.AddInt64(&c.count, int64(n))
 	return
+}
+
+func (c *AtomicCounter) Read() int64 {
+	return atomic.LoadInt64(&c.count)
 }
 
 func main() {
@@ -37,12 +43,12 @@ func main() {
 	}
 
 	// Load configurations
-	base_url := cfg.Section("url").Key("base_url").String()
-	disable_ssl_verification := cfg.Section("url").Key("disable_ssl_verification").MustBool()
-	ssl_domain := cfg.Section("url").Key("ssl_domain").String()
-	host_domain := cfg.Section("url").Key("host_domain").String()
-	lock_ip := cfg.Section("url").Key("lock_ip").String()
-	lock_port := cfg.Section("url").Key("lock_port").String()
+	baseURL := cfg.Section("url").Key("base_url").String()
+	disableSSLVerification := cfg.Section("url").Key("disable_ssl_verification").MustBool()
+	sslDomain := cfg.Section("url").Key("ssl_domain").String()
+	hostDomain := cfg.Section("url").Key("host_domain").String()
+	lockIP := cfg.Section("url").Key("lock_ip").String()
+	lockPort := cfg.Section("url").Key("lock_port").String()
 
 	connections := cfg.Section("Speed").Key("connections").String()
 
@@ -64,20 +70,20 @@ func main() {
 		}
 	}
 
-	if host_domain == "" {
-		u, err := url.Parse(base_url)
+	if hostDomain == "" {
+		u, err := url.Parse(baseURL)
 		if err != nil {
 			fmt.Printf("Failed to parse base URL: %v\n", err)
 			log.Fatal(err)
 		}
-		host_domain = u.Host
+		hostDomain = u.Host
 	}
 
-	if lock_port == "" {
-		if strings.HasPrefix(base_url, "https://") {
-			lock_port = "443"
+	if lockPort == "" {
+		if strings.HasPrefix(baseURL, "https://") {
+			lockPort = "443"
 		} else {
-			lock_port = "80"
+			lockPort = "80"
 		}
 	}
 
@@ -88,9 +94,9 @@ func main() {
 			if err != nil {
 				return nil, err
 			}
-			if host == host_domain {
-				if lock_ip != "" {
-					addr = lock_ip + ":" + lock_port
+			if host == hostDomain {
+				if lockIP != "" {
+					addr = lockIP + ":" + lockPort
 				} else {
 					ips, err := net.LookupIP(host)
 					if err != nil {
@@ -99,7 +105,7 @@ func main() {
 					if len(ips) == 0 {
 						return nil, fmt.Errorf("no IPs found for host: %s", host)
 					}
-					addr = ips[0].String() + ":" + lock_port
+					addr = ips[0].String() + ":" + lockPort
 				}
 			}
 			return dialContext(ctx, network, addr)
@@ -108,11 +114,8 @@ func main() {
 		MaxConnsPerHost:     maxConnsPerHost,
 	}
 
-	// Update MaxIdleConnsPerHost dynamically
-	transport.MaxIdleConnsPerHost = maxIdleConnsPerHost
-
 	// If set to true, SSL certificate verification will be disabled
-	if disable_ssl_verification {
+	if disableSSLVerification {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
@@ -120,20 +123,22 @@ func main() {
 		Transport: transport,
 	}
 
-	req, err := http.NewRequest("GET", base_url, nil)
+	req, err := http.NewRequest("GET", baseURL, nil)
 	if err != nil {
 		fmt.Printf("Failed to create request: %v\n", err)
 		log.Fatal(err)
 	}
 
 	// If the server requires the Host field, set the Host field of the request header
-	if ssl_domain != "" {
-		req.Host = ssl_domain
+	if sslDomain != "" {
+		req.Host = sslDomain
 	}
 
-	counter := new(AtomicCounter)
-	ringBuffer := make([]float64, 60)
-	index := 0
+	counter := &AtomicCounter{}
+	ringBufferSize := 60
+	ringBuffer := make([]float64, ringBufferSize)
+	currentIndex := 0
+	seconds := 60
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -145,12 +150,12 @@ func main() {
 			default:
 				time.Sleep(time.Second)
 
-				Mbps := float64(atomic.LoadInt64((*int64)(counter)) * 8 / 1024 / 1024)
-				ringBuffer[index] = Mbps
+				Mbps := float64(counter.Read()*8) / (1024 * 1024)
+				ringBuffer[currentIndex] = Mbps
 
-				avg3s := averageSpeed(ringBuffer, index, 3)
-				avg10s := averageSpeed(ringBuffer, index, 10)
-				avg60s := averageSpeed(ringBuffer, index, 60)
+				avg3s := averageSpeed(ringBuffer, currentIndex, seconds, 3)
+				avg10s := averageSpeed(ringBuffer, currentIndex, seconds, 10)
+				avg60s := averageSpeed(ringBuffer, currentIndex, seconds, 60)
 
 				screen.Clear()
 				screen.MoveTopLeft()
@@ -162,26 +167,24 @@ func main() {
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
 				fmt.Printf("\nRequest Info:\n")
 				fmt.Printf("Protocol: %s\n", req.URL.Scheme)
-				fmt.Printf("Host-Domain: %s\n", host_domain)
-				fmt.Printf("IP: %s\n", lock_ip)
-				fmt.Printf("Port: %s\n", lock_port)
+				fmt.Printf("Host-Domain: %s\n", hostDomain)
+				fmt.Printf("IP: %s\n", lockIP)
+				fmt.Printf("Port: %s\n", lockPort)
 				fmt.Printf("Path: %s\n", req.URL.Path)
 
-				atomic.StoreInt64((*int64)(counter), 0)
-				index = (index + 1) % 60
+				counter.Write([]byte{})
+				currentIndex = (currentIndex + 1) % ringBufferSize
 			}
 		}
 	}()
 
 	go func() {
 		c := make(chan os.Signal, 1)
-		signal.Notify(c)
+		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 		for s := range c {
-			if s == syscall.SIGINT {
-				fmt.Println("Caught signal SIGINT, stop downloading...")
-				cancel()
-				return
-			}
+			fmt.Printf("Caught signal %v, stop downloading...\n", s)
+			cancel()
+			break
 		}
 	}()
 
@@ -194,14 +197,17 @@ func main() {
 
 	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
 
+	// Close http client
+	client.CloseIdleConnections()
+
 	// Prevent the main function from exiting before the download is complete
 	<-ctx.Done()
 }
 
-func averageSpeed(ringBuffer []float64, currentIndex, seconds int) float64 {
+func averageSpeed(ringBuffer []float64, currentIndex, bufferSize, seconds int) float64 {
 	start := currentIndex - seconds + 1
 	if start < 0 {
-		start += len(ringBuffer)
+		start += bufferSize
 	}
 
 	end := currentIndex
@@ -209,7 +215,7 @@ func averageSpeed(ringBuffer []float64, currentIndex, seconds int) float64 {
 	total := 0.0
 	count := 0
 
-	for i := start; i != end; i = (i + 1) % len(ringBuffer) {
+	for i := start; i != end; i = (i + 1) % bufferSize {
 		total += ringBuffer[i]
 		count++
 	}
