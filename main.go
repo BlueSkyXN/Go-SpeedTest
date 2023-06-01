@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -35,10 +34,11 @@ func (c *AtomicCounter) Read() int64 {
 }
 
 var (
-	currentIndex    int
-	seconds         int = 60
-	testDuration    time.Duration
-	infiniteTesting bool
+	currentIndex int
+	seconds      int = 60
+	testDuration time.Duration
+	startTime    time.Time
+	infiniteTest bool
 )
 
 func main() {
@@ -62,10 +62,7 @@ func main() {
 	var maxIdleConnsPerHost int
 	var maxConnsPerHost int
 
-	// Validate connections value
-	validConnections := regexp.MustCompile(`^\d+$`).MatchString
-	if !validConnections(connections) {
-		fmt.Printf("Invalid connections value: %s. Defaulting to auto.\n", connections)
+	if connections == "auto" || connections == "0" {
 		maxIdleConnsPerHost = 0
 		maxConnsPerHost = 0
 	} else {
@@ -153,13 +150,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	if testDurationStr == "" || testDurationStr == "0" {
-		infiniteTesting = true
+		infiniteTest = true
 		fmt.Println("Testing duration: Infinite")
 	} else {
 		duration, err := strconv.ParseFloat(testDurationStr, 64)
 		if err != nil {
 			fmt.Printf("Invalid test duration: %s. Defaulting to infinite.\n", testDurationStr)
-			infiniteTesting = true
+			infiniteTest = true
 		} else {
 			testDuration = time.Duration(duration * float64(time.Second))
 			fmt.Printf("Testing duration: %s\n", testDuration.String())
@@ -167,7 +164,7 @@ func main() {
 	}
 
 	go func() {
-		startTime := time.Now()
+		startTime = time.Now()
 
 		for {
 			select {
@@ -181,7 +178,7 @@ func main() {
 
 				avg3s := averageSpeed(ringBuffer, currentIndex, bufferSize, 3)
 				avg10s := averageSpeed(ringBuffer, currentIndex, bufferSize, 10)
-				avg60s := averageSpeed(ringBuffer, currentIndex, bufferSize, 60)
+				avg60s := averageSpeed(ringBuffer, currentIndex, bufferSize, seconds)
 
 				screen.Clear()
 				screen.MoveTopLeft()
@@ -201,7 +198,7 @@ func main() {
 				atomic.StoreInt64((*int64)(counter), 0)
 				currentIndex = (currentIndex + 1) % bufferSize
 
-				if !infiniteTesting && time.Since(startTime) >= testDuration {
+				if !infiniteTest && time.Since(startTime) >= testDuration {
 					fmt.Printf("\nTesting duration reached. Stopping...\n")
 					cancel()
 					return
@@ -249,5 +246,8 @@ func averageSpeed(ringBuffer []float64, currentIndex, bufferSize, seconds int) f
 		count++
 	}
 
-	return total / float64(count)
+	if count < seconds {
+		return total / float64(count)
+	}
+	return total / float64(seconds)
 }
