@@ -34,8 +34,9 @@ func (c *AtomicCounter) Read() int64 {
 }
 
 var (
-	currentIndex int
-	seconds      int = 60
+	currentIndex     int
+	bufferSize       int = 60
+	totalElapsedTime time.Duration
 )
 
 func main() {
@@ -54,6 +55,7 @@ func main() {
 	lockPort := cfg.Section("url").Key("lock_port").String()
 
 	connections := cfg.Section("Speed").Key("connections").String()
+	testDuration := cfg.Section("Speed").Key("test_duration").String()
 
 	var maxIdleConnsPerHost int
 	var maxConnsPerHost int
@@ -140,12 +142,21 @@ func main() {
 	}
 
 	counter := new(AtomicCounter)
-	bufferSize := 60
 	ringBuffer := make([]float64, bufferSize)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
+		var testEndTime time.Time
+		if testDuration != "" {
+			duration, err := time.ParseDuration(testDuration)
+			if err != nil {
+				fmt.Printf("Invalid test duration value: %s. Defaulting to unlimited.\n", testDuration)
+			} else {
+				testEndTime = time.Now().Add(duration)
+			}
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -177,6 +188,11 @@ func main() {
 
 				atomic.StoreInt64((*int64)(counter), 0)
 				currentIndex = (currentIndex + 1) % bufferSize
+
+				if testEndTime != (time.Time{}) && time.Now().After(testEndTime) {
+					cancel()
+					return
+				}
 			}
 		}
 	}()
@@ -191,14 +207,32 @@ func main() {
 		}
 	}()
 
-	res, err := client.Do(req)
-	if err != nil {
-		fmt.Println(err)
-		log.Fatal(err)
-	}
-	defer res.Body.Close()
+	for {
+		res, err := client.Do(req)
+		if err != nil {
+			fmt.Println(err)
+			log.Fatal(err)
+		}
+		defer res.Body.Close()
 
-	_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+		_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+
+		// Check if the test duration has ended, if not, continue with a new request
+		if testDuration == "" || totalElapsedTime < testEndTime.Sub(time.Now()) {
+			// Reset the request for a new download
+			req, err = http.NewRequest("GET", baseURL, nil)
+			if err != nil {
+				fmt.Printf("Failed to create request: %v\n", err)
+				log.Fatal(err)
+			}
+
+			if sslDomain != "" {
+				req.Host = sslDomain
+			}
+		} else {
+			break
+		}
+	}
 
 	// Prevent the main function from exiting before the download is complete
 	<-ctx.Done()
