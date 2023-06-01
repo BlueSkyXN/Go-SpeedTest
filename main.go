@@ -103,7 +103,10 @@ func main() {
 				if lockIP != "" {
 					addr = lockIP + ":" + lockPort
 				} else {
-					ips, err := net.LookupIP(host)
+					ctx, cancel := context.WithTimeout(ctx, 2*time.Second) // 设置超时时间
+					defer cancel()
+
+					ips, err := net.LookupIPContext(ctx, host)
 					if err != nil {
 						return nil, err
 					}
@@ -120,7 +123,7 @@ func main() {
 	}
 
 	// Update MaxIdleConnsPerHost dynamically
-	transport.MaxIdleConnsPerHost = maxIdleConnsPerHost
+	atomic.StoreInt(&transport.MaxIdleConnsPerHost, maxIdleConnsPerHost)
 
 	// If set to true, SSL certificate verification will be disabled
 	if disableSSLVerification {
