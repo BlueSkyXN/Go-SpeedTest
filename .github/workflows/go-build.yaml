@@ -2,8 +2,8 @@ name: Go Building
 
 on:
   push:
-    branches:
-      - main
+    paths:
+      - 'main.go'
   workflow_dispatch:
 
 jobs:
