@@ -200,10 +200,20 @@ func main() {
 }
 
 func averageSpeed(ringBuffer []float64, currentIndex, seconds int) float64 {
-	start := (currentIndex + 1 + 60 - seconds) % 60
-	total := 0.0
-	for i := 0; i < seconds; i++ {
-		total += ringBuffer[(start+i)%60]
+	start := currentIndex - seconds + 1
+	if start < 0 {
+		start += len(ringBuffer)
 	}
-	return total / float64(seconds)
+
+	end := currentIndex
+
+	total := 0.0
+	count := 0
+
+	for i := start; i != end; i = (i + 1) % len(ringBuffer) {
+		total += ringBuffer[i]
+		count++
+	}
+
+	return total / float64(count)
 }
