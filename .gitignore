@@ -21,3 +21,4 @@
 go.work
 config.ini
 *.bak
+config-bak.ini
