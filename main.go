@@ -77,7 +77,7 @@ func main() {
 	}
 
 	totalFileSizeMB := cfg.Section("url").Key("total_file_size").MustInt(500)
-	totalFileSize := totalFileSizeMB * 1024 * 1024
+	//totalFileSize := totalFileSizeMB * 1024 * 1024
 	if err != nil {
 		fmt.Printf("Invalid total file size: %d. Please check the configuration.\n", totalFileSizeMB)
 		log.Fatal(err)
