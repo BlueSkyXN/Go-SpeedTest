@@ -56,24 +56,18 @@ func main() {
 	lockIP := cfg.Section("url").Key("lock_ip").String()
 	lockPort := cfg.Section("url").Key("lock_port").String()
 
-	connections := cfg.Section("Speed").Key("connections").String()
+	connections := cfg.Section("Speed").Key("connections").MustInt(1)
 	testDurationStr := cfg.Section("Speed").Key("test_duration").String()
 
 	var maxIdleConnsPerHost int
 	var maxConnsPerHost int
 
-	if connections == "auto" || connections == "0" {
+	if connections == 0 {
 		maxIdleConnsPerHost = 0
 		maxConnsPerHost = 0
 	} else {
-		maxIdleConnsPerHost, err = strconv.Atoi(connections)
-		if err != nil {
-			fmt.Printf("Invalid connections value: %s. Defaulting to auto.\n", connections)
-			maxIdleConnsPerHost = 0
-			maxConnsPerHost = 0
-		} else {
-			maxConnsPerHost = maxIdleConnsPerHost
-		}
+		maxIdleConnsPerHost = connections
+		maxConnsPerHost = connections
 	}
 
 	totalFileSizeMB := cfg.Section("url").Key("total_file_size").MustInt(500)
@@ -170,7 +164,6 @@ func main() {
 	}
 
 	go func() {
-
 		startTime = time.Now()
 
 		for {
@@ -194,7 +187,7 @@ func main() {
 				screen.MoveTopLeft()
 
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
-				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average |    测速时间   | Downloaded Size|\n")
+				fmt.Printf("|    Time   | Current Speed | 3s Average | 10s Average | 60s Average |   Test TIME   | Downloaded Size|\n")
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
 				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f | %13d | %11.2f MB |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s, int(elapsedTime.Seconds()), float64(bytesDownloaded)/(1024*1024))
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|---------------|----------------|\n")
@@ -227,22 +220,24 @@ func main() {
 		}
 	}()
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				res, err := client.Do(req)
-				if err != nil {
-					fmt.Println(err)
-					log.Fatal(err)
+	for i := 0; i < connections; i++ {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					res, err := client.Do(req)
+					if err != nil {
+						fmt.Println(err)
+						log.Fatal(err)
+					}
+					_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
+					res.Body.Close()
 				}
-				_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
-				res.Body.Close()
 			}
-		}
-	}()
+		}()
+	}
 
 	<-ctx.Done()
 }
