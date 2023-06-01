@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -21,14 +22,6 @@ import (
 )
 
 type AtomicCounter int64
-
-type requestInfo struct {
-	protocol   string
-	hostDomain string
-	ip         string
-	port       string
-	path       string
-}
 
 func (c *AtomicCounter) Write(p []byte) (n int, err error) {
 	n = len(p)
@@ -51,6 +44,26 @@ func main() {
 	lock_ip := cfg.Section("url").Key("lock_ip").String()
 	lock_port := cfg.Section("url").Key("lock_port").String()
 
+	connections := cfg.Section("Speed").Key("connections").String()
+
+	var maxIdleConnsPerHost int
+	var maxConnsPerHost int
+
+	if connections == "auto" || connections == "0" {
+		maxIdleConnsPerHost = 0
+		maxConnsPerHost = 0
+	} else {
+		var err error
+		maxIdleConnsPerHost, err = strconv.Atoi(connections)
+		if err != nil {
+			fmt.Printf("Invalid connections value: %s. Defaulting to auto.\n", connections)
+			maxIdleConnsPerHost = 0
+			maxConnsPerHost = 0
+		} else {
+			maxConnsPerHost = maxIdleConnsPerHost
+		}
+	}
+
 	if host_domain == "" {
 		u, err := url.Parse(base_url)
 		if err != nil {
@@ -68,7 +81,6 @@ func main() {
 		}
 	}
 
-	// Custom DialContext
 	dialContext := (&net.Dialer{}).DialContext
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -76,12 +88,10 @@ func main() {
 			if err != nil {
 				return nil, err
 			}
-
 			if host == host_domain {
 				if lock_ip != "" {
 					addr = lock_ip + ":" + lock_port
 				} else {
-					// Resolve DNS and use the first IP
 					ips, err := net.LookupIP(host)
 					if err != nil {
 						return nil, err
@@ -94,7 +104,12 @@ func main() {
 			}
 			return dialContext(ctx, network, addr)
 		},
+		MaxIdleConnsPerHost: maxIdleConnsPerHost,
+		MaxConnsPerHost:     maxConnsPerHost,
 	}
+
+	// Update MaxIdleConnsPerHost dynamically
+	transport.MaxIdleConnsPerHost = maxIdleConnsPerHost
 
 	// If set to true, SSL certificate verification will be disabled
 	if disable_ssl_verification {
@@ -119,22 +134,6 @@ func main() {
 	counter := new(AtomicCounter)
 	ringBuffer := make([]float64, 60)
 	index := 0
-	client = &http.Client{
-		Transport: transport,
-	}
-
-	// Save request info for later display
-	reqInfo := requestInfo{
-		protocol:   req.URL.Scheme,
-		hostDomain: req.Host,
-		ip:         lock_ip,
-		port:       lock_port,
-		path:       req.URL.Path,
-	}
-
-	counter = new(AtomicCounter)
-	ringBuffer = make([]float64, 60)
-	index = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -162,11 +161,11 @@ func main() {
 				fmt.Printf("|  %s | %-13.2f | %-10.2f | %-11.2f | %-11.2f |\n", time.Now().Format("15:04:05"), Mbps, avg3s, avg10s, avg60s)
 				fmt.Printf("|-----------|---------------|------------|-------------|-------------|\n")
 				fmt.Printf("\nRequest Info:\n")
-				fmt.Printf("Protocol: %s\n", reqInfo.protocol)
-				fmt.Printf("Host-Domain: %s\n", reqInfo.hostDomain)
-				fmt.Printf("IP: %s\n", reqInfo.ip)
-				fmt.Printf("Port: %s\n", reqInfo.port)
-				fmt.Printf("Path: %s\n", reqInfo.path)
+				fmt.Printf("Protocol: %s\n", req.URL.Scheme)
+				fmt.Printf("Host-Domain: %s\n", host_domain)
+				fmt.Printf("IP: %s\n", lock_ip)
+				fmt.Printf("Port: %s\n", lock_port)
+				fmt.Printf("Path: %s\n", req.URL.Path)
 
 				atomic.StoreInt64((*int64)(counter), 0)
 				index = (index + 1) % 60
