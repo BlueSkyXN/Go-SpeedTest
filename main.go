@@ -125,10 +125,6 @@ func main() {
 		MaxConnsPerHost:     maxConnsPerHost,
 	}
 
-	// Update MaxIdleConnsPerHost dynamically
-	transport.MaxIdleConnsPerHost = maxIdleConnsPerHost
-
-	// If set to true, SSL certificate verification will be disabled
 	if disableSSLVerification {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
@@ -143,7 +139,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// If the server requires the Host field, set the Host field of the request header
 	if sslDomain != "" {
 		req.Host = sslDomain
 	}
@@ -238,9 +233,7 @@ func main() {
 						fmt.Println(err)
 						log.Fatal(err)
 					}
-					//_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, counter))
 					_, _ = io.Copy(io.Discard, io.TeeReader(res.Body, io.MultiWriter(counter, totalCounter)))
-
 					res.Body.Close()
 				}
 			}
