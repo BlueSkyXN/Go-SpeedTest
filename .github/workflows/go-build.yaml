@@ -45,14 +45,35 @@ jobs:
         run: |
           echo "GOOS=${{ matrix.GOOS }}" >> $GITHUB_ENV
           echo "GOARCH=${{ matrix.GOARCH }}" >> $GITHUB_ENV
+          mkdir -p dist/${{ matrix.os }}
           for file in *.go; do
             base_name=$(basename "$file" .go)
             go build -o dist/${{ matrix.os }}/$base_name${{ matrix.ext }} $file
           done
         shell: bash
 
-      - name: Upload Artifacts
+      - name: Upload All Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: build_Go-SpeedTest_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
           path: dist/${{ matrix.os }}/
+
+      - name: Upload Individual Artifacts
+        run: |
+          for file in dist/${{ matrix.os }}/*${{ matrix.ext }}; do
+            base_name=$(basename "$file" ${matrix.ext})
+            echo "Uploading $file as $base_name"
+            echo "::set-output name=artifact_name::${base_name}_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}"
+          done
+        shell: bash
+      - name: Upload Main Binary
+        uses: actions/upload-artifact@v3
+        with:
+          name: main_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
+          path: dist/${{ matrix.os }}/main${{ matrix.ext }}
+
+      - name: Upload Download Binary
+        uses: actions/upload-artifact@v3
+        with:
+          name: download_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
+          path: dist/${{ matrix.os }}/download${{ matrix.ext }}
