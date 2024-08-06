@@ -148,7 +148,7 @@ func downloadFile(cfg *Config) error {
 
 	chunks, err := loadProgress(filePath)
 	if err != nil {
-		chunks = calculateChunks(size)
+		chunks = calculateChunks(size, cfg.Connections)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -261,13 +261,24 @@ func getFileInfo(cfg *Config) (size int64, supportsRanges bool, err error) {
 	return 0, false, fmt.Errorf("unable to determine file size")
 }
 
-func calculateChunks(size int64) []ChunkInfo {
+func calculateChunks(size int64, connections int) []ChunkInfo {
 	var chunks []ChunkInfo
-	for start := int64(0); start < size; start += defaultChunkSize {
-		end := start + defaultChunkSize - 1
+	chunkSize := defaultChunkSize
+
+	for start := int64(0); start < size; start += chunkSize {
+		end := start + chunkSize - 1
 		if end >= size {
 			end = size - 1
 		}
+
+		remainingSize := size - start
+		if remainingSize < int64(connections)*chunkSize {
+			chunkSize = remainingSize / int64(connections)
+			if chunkSize < minChunkSize {
+				chunkSize = minChunkSize
+			}
+		}
+
 		chunks = append(chunks, ChunkInfo{
 			Start: start,
 			End:   end,
@@ -610,6 +621,7 @@ func displayProgress(progressChan <-chan int64, totalSize int64) {
 			if !ok {
 				fmt.Println("\nDownload complete.")
 				return
+				mutex.Unlock()
 			}
 			mutex.Lock()
 			downloaded += n
