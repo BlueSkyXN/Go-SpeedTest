@@ -31,8 +31,8 @@ const (
 	defaultBufferSize  = 32 * 1024
 	maxRetries         = 3
 	retryDelay         = 5 * time.Second
-	defaultChunkSize   = 10 * 1024 * 1024 // 10MB
-	minChunkSize       = 100 * 1024       // 100KB
+	defaultChunkSize   int64 = 10 * 1024 * 1024 // 10MB
+	minChunkSize       int64 = 100 * 1024       // 100KB
 )
 
 type Config struct {
@@ -148,7 +148,7 @@ func downloadFile(cfg *Config) error {
 
 	chunks, err := loadProgress(filePath)
 	if err != nil {
-		chunks = calculateChunks(size, cfg.Connections)
+		chunks = calculateChunks(size, int64(cfg.Connections))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -261,7 +261,7 @@ func getFileInfo(cfg *Config) (size int64, supportsRanges bool, err error) {
 	return 0, false, fmt.Errorf("unable to determine file size")
 }
 
-func calculateChunks(size int64, connections int) []ChunkInfo {
+func calculateChunks(size int64, connections int64) []ChunkInfo {
 	var chunks []ChunkInfo
 	chunkSize := defaultChunkSize
 
@@ -272,8 +272,8 @@ func calculateChunks(size int64, connections int) []ChunkInfo {
 		}
 
 		remainingSize := size - start
-		if remainingSize < int64(connections)*chunkSize {
-			chunkSize = remainingSize / int64(connections)
+		if remainingSize < connections*chunkSize {
+			chunkSize = remainingSize / connections
 			if chunkSize < minChunkSize {
 				chunkSize = minChunkSize
 			}
@@ -621,7 +621,6 @@ func displayProgress(progressChan <-chan int64, totalSize int64) {
 			if !ok {
 				fmt.Println("\nDownload complete.")
 				return
-				mutex.Unlock()
 			}
 			mutex.Lock()
 			downloaded += n
