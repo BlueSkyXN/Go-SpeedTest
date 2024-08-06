@@ -370,10 +370,8 @@ func downloadSubChunks(ctx context.Context, cfg *Config, filePath string, subChu
 
 	for i, subChunk := range subChunks {
 		subChunk := subChunk
-		subChunkIndex := fmt.Sprintf("%d.%d", chunkIndex, i)
-
 		g.Go(func() error {
-			return singleChunkDownload(ctx, cfg, filePath, subChunk, subChunkIndex, progressChan, limiter)
+			return singleChunkDownload(ctx, cfg, filePath, subChunk, chunkIndex, progressChan, limiter)
 		})
 	}
 
