@@ -38,12 +38,12 @@ type Config struct {
 	URL          string
 	Connections  int
 	DownloadPath string
-	LockIP       string
-	LockPort     string
 	MaxSpeed     int64
 	Burst        int
 	UserAgent    string
 	Referer      string
+	LockIP       string
+	LockPort     string
 }
 
 type ChunkInfo struct {
@@ -79,12 +79,12 @@ func loadConfig(path string) (*Config, error) {
 		URL:          iniCfg.Section("Download").Key("url").String(),
 		Connections:  iniCfg.Section("Download").Key("connections").MustInt(defaultConnections),
 		DownloadPath: iniCfg.Section("Download").Key("download_path").String(),
-		LockIP:       iniCfg.Section("Download").Key("lock_ip").String(),
-		LockPort:     iniCfg.Section("Download").Key("lock_port").String(),
 		MaxSpeed:     iniCfg.Section("Download").Key("max_speed").MustInt64(0),
 		Burst:        iniCfg.Section("Download").Key("burst").MustInt(defaultBufferSize),
 		UserAgent:    iniCfg.Section("Download").Key("user_agent").String(),
 		Referer:      iniCfg.Section("Download").Key("referer").String(),
+		LockIP:       iniCfg.Section("Download").Key("lock_ip").String(),
+		LockPort:     iniCfg.Section("Download").Key("lock_port").String(),
 	}
 
 	if cfg.URL == "" {
@@ -102,6 +102,20 @@ func downloadFile(cfg *Config) error {
 	parsedURL, err := url.Parse(cfg.URL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %v", err)
+	}
+
+	if cfg.LockIP == "" || cfg.LockPort == "" {
+		host, port, err := net.SplitHostPort(parsedURL.Host)
+		if err != nil {
+			host = parsedURL.Host
+			if parsedURL.Scheme == "https" {
+				port = "443"
+			} else {
+				port = "80"
+			}
+		}
+		cfg.LockIP = host
+		cfg.LockPort = port
 	}
 
 	fileName := filepath.Base(parsedURL.Path)
