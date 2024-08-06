@@ -114,8 +114,12 @@ func downloadFile(cfg *Config) error {
 				port = "80"
 			}
 		}
-		cfg.LockIP = host
-		cfg.LockPort = port
+		if cfg.LockIP == "" {
+			cfg.LockIP = host
+		}
+		if cfg.LockPort == "" {
+			cfg.LockPort = port
+		}
 	}
 
 	fileName := filepath.Base(parsedURL.Path)
@@ -160,6 +164,7 @@ func downloadFile(cfg *Config) error {
 	for i := range chunks {
 		chunkChan <- &chunks[i]
 	}
+	close(chunkChan) // Ensure the chunk channel is closed after all chunks are sent
 
 	for i := 0; i < cfg.Connections; i++ {
 		g.Go(func() error {
