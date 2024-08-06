@@ -177,9 +177,9 @@ func downloadFile(cfg *Config) error {
 					continue
 				}
 				ip := getCurrentIP()
-				taskCount[ip]++
+				increaseTaskCount(ip)
 				err := downloadChunk(ctx, cfg, filePath, chunk, progressChan, limiter, ip)
-				taskCount[ip]--
+				decreaseTaskCount(ip)
 				if err != nil {
 					return err
 				}
@@ -464,6 +464,18 @@ func getCurrentIP() string {
 	}
 
 	return availableIPs[0]
+}
+
+func increaseTaskCount(ip string) {
+	ipLock.Lock()
+	defer ipLock.Unlock()
+	taskCount[ip]++
+}
+
+func decreaseTaskCount(ip string) {
+	ipLock.Lock()
+	defer ipLock.Unlock()
+	taskCount[ip]--
 }
 
 func removeIP(ip string) {
