@@ -168,7 +168,7 @@ func downloadFile(cfg *Config) error {
 	for i := range chunks {
 		chunkChan <- &chunks[i]
 	}
-	close(chunkChan) // Ensure the chunk channel is closed after all chunks are sent
+	// Don't close chunkChan here
 
 	for i := 0; i < cfg.Connections; i++ {
 		g.Go(func() error {
@@ -181,19 +181,21 @@ func downloadFile(cfg *Config) error {
 				err := downloadChunk(ctx, cfg, filePath, chunk, progressChan, limiter, ip)
 				decreaseTaskCount(ip)
 				if err != nil {
+					// Retry logic with re-adding chunk back to channel
+					chunkChan <- chunk
 					return err
 				}
 				chunk.Complete = true
 				saveProgress(filePath, chunks)
-
-				// 重新添加未完成的任务
-				chunkChan <- chunk
 			}
 			return nil
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	err = g.Wait()
+	close(chunkChan) // Close chunkChan after all workers are done
+
+	if err != nil {
 		return fmt.Errorf("download failed: %v", err)
 	}
 
