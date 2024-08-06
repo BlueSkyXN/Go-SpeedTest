@@ -65,6 +65,7 @@ var (
 	ipList        []string
 	algorithm     string
 	fallbackLimit = 3
+	taskCount     map[string]int
 )
 
 func main() {
@@ -77,6 +78,7 @@ func main() {
 	}
 
 	ipFailures = make(map[string]int)
+	taskCount = make(map[string]int)
 	ipList = cfg.IPList
 	algorithm = cfg.Algorithm
 	availableIPs = cfg.IPList
@@ -174,7 +176,10 @@ func downloadFile(cfg *Config) error {
 				if chunk.Complete {
 					continue
 				}
-				err := downloadChunk(ctx, cfg, filePath, chunk, progressChan, limiter)
+				ip := getCurrentIP()
+				taskCount[ip]++
+				err := downloadChunk(ctx, cfg, filePath, chunk, progressChan, limiter, ip)
+				taskCount[ip]--
 				if err != nil {
 					return err
 				}
@@ -271,11 +276,11 @@ func calculateChunks(size int64) []ChunkInfo {
 	return chunks
 }
 
-func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *ChunkInfo, progressChan chan<- int64, limiter *rate.Limiter) error {
+func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *ChunkInfo, progressChan chan<- int64, limiter *rate.Limiter, ip string) error {
 	retryCount := 0
 
 	for retryCount < maxRetries {
-		err := singleChunkDownload(ctx, cfg, filePath, chunk, progressChan, limiter)
+		err := singleChunkDownload(ctx, cfg, filePath, chunk, progressChan, limiter, ip)
 		if err == nil {
 			return nil
 		}
@@ -285,14 +290,12 @@ func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *Chu
 		time.Sleep(retryDelay)
 	}
 
-	markIPFailure(getCurrentIP())
+	markIPFailure(ip)
 
 	return fmt.Errorf("chunk failed to download after %d retries", maxRetries)
 }
 
-func singleChunkDownload(ctx context.Context, cfg *Config, filePath string, chunk *ChunkInfo, progressChan chan<- int64, limiter *rate.Limiter) error {
-	ip := getCurrentIP()
-
+func singleChunkDownload(ctx context.Context, cfg *Config, filePath string, chunk *ChunkInfo, progressChan chan<- int64, limiter *rate.Limiter, ip string) error {
 	tmpFilePath := fmt.Sprintf("%s.part%d-%d", filePath, chunk.Start, chunk.End)
 	tmpFile, err := os.OpenFile(tmpFilePath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -436,9 +439,31 @@ func getCurrentIP() string {
 		return ip
 	case "random":
 		return availableIPs[rand.Intn(len(availableIPs))]
-	default:
-		return availableIPs[0]
+	case "first_available":
+		for _, ip := range availableIPs {
+			if ipFailures[ip] < fallbackLimit {
+				return ip
+			}
+		}
+	case "load_balance":
+		minTasks := -1
+		selectedIP := ""
+		for _, ip := range availableIPs {
+			if ipFailures[ip] >= fallbackLimit {
+				continue
+			}
+			if minTasks == -1 || taskCount[ip] < minTasks {
+				minTasks = taskCount[ip]
+				selectedIP = ip
+			}
+		}
+		if minTasks == 0 {
+			return availableIPs[rand.Intn(len(availableIPs))]
+		}
+		return selectedIP
 	}
+
+	return availableIPs[0]
 }
 
 func removeIP(ip string) {
