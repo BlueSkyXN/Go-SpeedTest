@@ -91,3 +91,9 @@ jobs:
         with:
           name: download_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
           path: dist/${{ matrix.os }}/download${{ matrix.ext }}
+
+      - name: Upload dynamic_download Binary
+        uses: actions/upload-artifact@v3
+        with:
+          name: dynamic_download_${{ matrix.os }}_v${{ env.COMMIT_MESSAGE }}
+          path: dist/${{ matrix.os }}/dynamic_download${{ matrix.ext }}
