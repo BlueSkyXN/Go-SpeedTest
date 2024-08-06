@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/gob"
 	"flag"
 	"fmt"
 	"io"
@@ -15,7 +17,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -43,6 +44,8 @@ type ChunkInfo struct {
 	Start      int64
 	End        int64
 	Downloaded int64
+	Complete   bool
+	Hash       []byte
 }
 
 func main() {
@@ -112,7 +115,10 @@ func downloadFile(cfg *Config) error {
 		cfg.Connections = 1
 	}
 
-	chunks := calculateChunks(size, cfg.Connections)
+	chunks, err := loadProgress(filePath)
+	if err != nil {
+		chunks = calculateChunks(size, cfg.Connections)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -124,10 +130,24 @@ func downloadFile(cfg *Config) error {
 
 	limiter := rate.NewLimiter(rate.Limit(cfg.MaxSpeed), int(cfg.MaxSpeed))
 
-	for i, chunk := range chunks {
-		i, chunk := i, chunk
+	for i := range chunks {
+		i := i
 		g.Go(func() error {
-			return downloadChunk(ctx, cfg, filePath, chunk, i, progressChan, limiter)
+			for !chunks[i].Complete {
+				err := downloadChunk(ctx, cfg, filePath, &chunks[i], i, progressChan, limiter)
+				if err != nil {
+					log.Printf("Chunk %d download failed: %v. Retrying...", i, err)
+					continue
+				}
+				if err := verifyChunk(filePath, &chunks[i], i); err != nil {
+					log.Printf("Chunk %d verification failed: %v. Retrying...", i, err)
+					chunks[i].Downloaded = 0
+					continue
+				}
+				chunks[i].Complete = true
+				saveProgress(filePath, chunks)
+			}
+			return nil
 		})
 	}
 
@@ -208,7 +228,7 @@ func calculateChunks(size int64, connections int) []ChunkInfo {
 	return chunks
 }
 
-func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk ChunkInfo, chunkIndex int, progressChan chan<- int64, limiter *rate.Limiter) error {
+func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *ChunkInfo, chunkIndex int, progressChan chan<- int64, limiter *rate.Limiter) error {
 	tmpFilePath := fmt.Sprintf("%s.part%d", filePath, chunkIndex)
 	tmpFile, err := os.OpenFile(tmpFilePath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -216,72 +236,61 @@ func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk Chun
 	}
 	defer tmpFile.Close()
 
-	for retry := 0; retry < maxRetries; retry++ {
-		err = func() error {
-			req, err := http.NewRequestWithContext(ctx, "GET", cfg.URL, nil)
-			if err != nil {
-				return fmt.Errorf("failed to create request: %v", err)
-			}
-
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunk.Start+chunk.Downloaded, chunk.End))
-
-			client := createCustomHTTPClient(cfg.LockIP, cfg.LockPort, cfg.URL)
-			resp, err := client.Do(req)
-			if err != nil {
-				return fmt.Errorf("failed to send request: %v", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("server returned non-200 status: %v", resp.Status)
-			}
-
-			_, err = tmpFile.Seek(chunk.Downloaded, io.SeekStart)
-			if err != nil {
-				return fmt.Errorf("failed to seek in temp file: %v", err)
-			}
-
-			buf := make([]byte, defaultBufferSize)
-			for {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					n, err := resp.Body.Read(buf)
-					if n > 0 {
-						if err := limiter.WaitN(ctx, n); err != nil {
-							return fmt.Errorf("rate limit error: %v", err)
-						}
-
-						_, err := tmpFile.Write(buf[:n])
-						if err != nil {
-							return fmt.Errorf("failed to write to temp file: %v", err)
-						}
-
-						chunk.Downloaded += int64(n)
-						progressChan <- int64(n)
-					}
-					if err != nil {
-						if err == io.EOF {
-							return nil
-						}
-						return fmt.Errorf("failed to read chunk: %v", err)
-					}
-				}
-			}
-		}()
-
-		if err == nil {
-			break
-		}
-
-		if retry < maxRetries-1 {
-			log.Printf("Chunk %d download failed, retrying in %v: %v", chunkIndex, retryDelay, err)
-			time.Sleep(retryDelay)
-		}
+	req, err := http.NewRequestWithContext(ctx, "GET", cfg.URL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
 	}
 
-	return err
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunk.Start+chunk.Downloaded, chunk.End))
+
+	client := createCustomHTTPClient(cfg.LockIP, cfg.LockPort, cfg.URL)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned non-200 status: %v", resp.Status)
+	}
+
+	_, err = tmpFile.Seek(chunk.Downloaded, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("failed to seek in temp file: %v", err)
+	}
+
+	hash := sha256.New()
+	writer := io.MultiWriter(tmpFile, hash)
+
+	buf := make([]byte, defaultBufferSize)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			n, err := resp.Body.Read(buf)
+			if n > 0 {
+				if err := limiter.WaitN(ctx, n); err != nil {
+					return fmt.Errorf("rate limit error: %v", err)
+				}
+
+				_, err := writer.Write(buf[:n])
+				if err != nil {
+					return fmt.Errorf("failed to write to temp file: %v", err)
+				}
+
+				chunk.Downloaded += int64(n)
+				progressChan <- int64(n)
+			}
+			if err != nil {
+				if err == io.EOF {
+					chunk.Hash = hash.Sum(nil)
+					return nil
+				}
+				return fmt.Errorf("failed to read chunk: %v", err)
+			}
+		}
+	}
 }
 
 func createCustomHTTPClient(lockIP, lockPort, rawURL string) *http.Client {
@@ -326,6 +335,53 @@ func createCustomHTTPClient(lockIP, lockPort, rawURL string) *http.Client {
 	return &http.Client{Transport: transport}
 }
 
+func verifyChunk(filePath string, chunk *ChunkInfo, chunkIndex int) error {
+	tmpFilePath := fmt.Sprintf("%s.part%d", filePath, chunkIndex)
+	file, err := os.Open(tmpFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open chunk file: %v", err)
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	_, err = io.Copy(hash, file)
+	if err != nil {
+		return fmt.Errorf("failed to calculate chunk hash: %v", err)
+	}
+
+	if !bytes.Equal(hash.Sum(nil), chunk.Hash) {
+		return fmt.Errorf("chunk hash mismatch")
+	}
+
+	return nil
+}
+
+func saveProgress(filePath string, chunks []ChunkInfo) error {
+	progressFile := filePath + ".progress"
+	file, err := os.Create(progressFile)
+	if err != nil {
+		return fmt.Errorf("failed to create progress file: %v", err)
+	}
+	defer file.Close()
+
+	encoder := gob.NewEncoder(file)
+	return encoder.Encode(chunks)
+}
+
+func loadProgress(filePath string) ([]ChunkInfo, error) {
+	progressFile := filePath + ".progress"
+	file, err := os.Open(progressFile)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var chunks []ChunkInfo
+	decoder := gob.NewDecoder(file)
+	err = decoder.Decode(&chunks)
+	return chunks, err
+}
+
 func mergeChunks(filePath string, chunks []ChunkInfo) error {
 	destFile, err := os.Create(filePath)
 	if err != nil {
@@ -333,7 +389,11 @@ func mergeChunks(filePath string, chunks []ChunkInfo) error {
 	}
 	defer destFile.Close()
 
-	for i := range chunks {
+	for i, chunk := range chunks {
+		if !chunk.Complete {
+			return fmt.Errorf("chunk %d is not complete", i)
+		}
+
 		tmpFilePath := fmt.Sprintf("%s.part%d", filePath, i)
 		tmpFile, err := os.Open(tmpFilePath)
 		if err != nil {
@@ -349,6 +409,7 @@ func mergeChunks(filePath string, chunks []ChunkInfo) error {
 		}
 	}
 
+	os.Remove(filePath + ".progress")
 	return nil
 }
 
