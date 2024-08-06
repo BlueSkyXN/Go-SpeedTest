@@ -3,7 +3,7 @@ name: Go Building
 on:
   push:
     paths:
-      - 'main.go'
+      - '*.go'
   workflow_dispatch:
 
 jobs:
@@ -41,11 +41,14 @@ jobs:
           go mod download
           go mod tidy
 
-      - name: Build executable
+      - name: Build executables
         run: |
           echo "GOOS=${{ matrix.GOOS }}" >> $GITHUB_ENV
           echo "GOARCH=${{ matrix.GOARCH }}" >> $GITHUB_ENV
-          go build -o dist/${{ matrix.os }}/GST${{ matrix.ext }} ./...
+          for file in *.go; do
+            base_name=$(basename "$file" .go)
+            go build -o dist/${{ matrix.os }}/$base_name${{ matrix.ext }} $file
+          done
         shell: bash
 
       - name: Upload Artifacts
