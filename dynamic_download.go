@@ -446,83 +446,62 @@ func mergeChunks(filePath string, chunks []ChunkInfo) error {
 		}
 
 		_, err = io.Copy(destFile, tmpFile)
-		tmpFile
+		tmpFile.Close()
+		os.Remove(tmpFilePath)
 
-		func mergeChunks(filePath string, chunks []ChunkInfo) error {
-			destFile, err := os.Create(filePath)
-			if err != nil {
-				return err
-			}
-			defer destFile.Close()
-		
-			for _, chunk := range chunks {
-				if !chunk.Complete {
-					return fmt.Errorf("chunk %d-%d is not complete", chunk.Start, chunk.End)
-				}
-		
-				tmpFilePath := fmt.Sprintf("%s.part%d-%d", filePath, chunk.Start, chunk.End)
-				tmpFile, err := os.Open(tmpFilePath)
-				if err != nil {
-					return fmt.Errorf("failed to open temp file: %v", err)
-				}
-		
-				_, err = io.Copy(destFile, tmpFile)
-				tmpFile.Close()
-				os.Remove(tmpFilePath)
-		
-				if err != nil {
-					return fmt.Errorf("failed to copy temp file: %v", err)
-				}
-			}
-		
-			os.Remove(filePath + ".progress")
-			return nil
+		if err != nil {
+			return fmt.Errorf("failed to copy temp file: %v", err)
 		}
-		
-		func verifyFile(filePath string) error {
-			file, err := os.Open(filePath)
-			if err != nil {
-				return fmt.Errorf("failed to open file for verification: %v", err)
+	}
+
+	os.Remove(filePath + ".progress")
+	return nil
+}
+
+func verifyFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file for verification: %v", err)
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("failed to calculate file hash: %v", err)
+	}
+
+	sum := hash.Sum(nil)
+	fmt.Printf("File SHA256: %x\n", sum)
+
+	return nil
+}
+
+func displayProgress(progressChan <-chan int64, totalSize int64) {
+	var downloaded int64
+	start := time.Now()
+	var mutex sync.Mutex
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case n, ok := <-progressChan:
+			if !ok {
+				fmt.Println("\nDownload complete.")
+				return
 			}
-			defer file.Close()
-		
-			hash := sha256.New()
-			if _, err := io.Copy(hash, file); err != nil {
-				return fmt.Errorf("failed to calculate file hash: %v", err)
-			}
-		
-			sum := hash.Sum(nil)
-			fmt.Printf("File SHA256: %x\n", sum)
-		
-			return nil
+			mutex.Lock()
+			downloaded += n
+			mutex.Unlock()
+		case <-ticker.C:
+			mutex.Lock()
+			percent := float64(downloaded) / float64(totalSize) * 100
+			elapsed := time.Since(start)
+			speed := float64(downloaded) / elapsed.Seconds() / 1024 / 1024
+			mutex.Unlock()
+
+			fmt.Printf("\rProgress: %.2f%% | Speed: %.2f MB/s", percent, speed)
 		}
-		
-		func displayProgress(progressChan <-chan int64, totalSize int64) {
-			var downloaded int64
-			start := time.Now()
-			var mutex sync.Mutex
-		
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-		
-			for {
-				select {
-				case n, ok := <-progressChan:
-					if !ok {
-						fmt.Println("\nDownload complete.")
-						return
-					}
-					mutex.Lock()
-					downloaded += n
-					mutex.Unlock()
-				case <-ticker.C:
-					mutex.Lock()
-					percent := float64(downloaded) / float64(totalSize) * 100
-					elapsed := time.Since(start)
-					speed := float64(downloaded) / elapsed.Seconds() / 1024 / 1024
-					mutex.Unlock()
-		
-					fmt.Printf("\rProgress: %.2f%% | Speed: %.2f MB/s", percent, speed)
-				}
-			}
-		}
+	}
+}
