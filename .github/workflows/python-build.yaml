@@ -7,7 +7,7 @@ on:
     paths:
       - 'start/preset_plans.py'
       - 'start/quick-start.py'
-      - '.github\workflows\*.yaml'
+      - '.github/workflows/*.yaml'
 jobs:
   build-quick-start:
     runs-on: ${{ matrix.os }}
