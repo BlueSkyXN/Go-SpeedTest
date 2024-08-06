@@ -29,6 +29,7 @@ const (
 	defaultBufferSize  = 32 * 1024
 	maxRetries         = 3
 	retryDelay         = 5 * time.Second
+	minChunkSize       = 1024 * 10240 // 10MB, 可以根据需要调整这个值
 )
 
 type Config struct {
@@ -246,6 +247,33 @@ func calculateChunks(size int64, connections int) []ChunkInfo {
 }
 
 func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *ChunkInfo, chunkIndex int, progressChan chan<- int64, limiter *rate.Limiter) error {
+	retryCount := 0
+
+	for retryCount < maxRetries {
+		err := singleChunkDownload(ctx, cfg, filePath, chunk, chunkIndex, progressChan, limiter)
+		if err == nil {
+			return nil
+		}
+
+		retryCount++
+		log.Printf("Chunk %d download failed: %v. Retrying... (%d/%d)", chunkIndex, err, retryCount, maxRetries)
+		time.Sleep(retryDelay)
+
+		if retryCount == maxRetries && (chunk.End-chunk.Start) > minChunkSize {
+			// 如果达到最大重试次数且块大小大于最小块大小，则进一步细分该块
+			log.Printf("Chunk %d failed after %d retries, splitting into smaller chunks", chunkIndex, maxRetries)
+			subChunks := splitChunk(chunk, minChunkSize)
+			err := downloadSubChunks(ctx, cfg, filePath, subChunks, chunkIndex, progressChan, limiter)
+			if err == nil {
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("chunk %d failed to download after %d retries", chunkIndex, maxRetries)
+}
+
+func singleChunkDownload(ctx context.Context, cfg *Config, filePath string, chunk *ChunkInfo, chunkIndex int, progressChan chan<- int64, limiter *rate.Limiter) error {
 	tmpFilePath := fmt.Sprintf("%s.part%d", filePath, chunkIndex)
 	tmpFile, err := os.OpenFile(tmpFilePath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -311,6 +339,73 @@ func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *Chu
 			}
 		}
 	}
+}
+
+func splitChunk(chunk *ChunkInfo, minChunkSize int64) []*ChunkInfo {
+	var subChunks []*ChunkInfo
+	size := chunk.End - chunk.Start + 1
+	numSubChunks := size / minChunkSize
+	if size%minChunkSize != 0 {
+		numSubChunks++
+	}
+
+	for i := int64(0); i < numSubChunks; i++ {
+		start := chunk.Start + i*minChunkSize
+		end := start + minChunkSize - 1
+		if end > chunk.End {
+			end = chunk.End
+		}
+
+		subChunks = append(subChunks, &ChunkInfo{
+			Start: start,
+			End:   end,
+		})
+	}
+
+	return subChunks
+}
+
+func downloadSubChunks(ctx context.Context, cfg *Config, filePath string, subChunks []*ChunkInfo, chunkIndex int, progressChan chan<- int64, limiter *rate.Limiter) error {
+	g, ctx := errgroup.WithContext(ctx)
+
+	for i, subChunk := range subChunks {
+		subChunk := subChunk
+		subChunkIndex := fmt.Sprintf("%d.%d", chunkIndex, i)
+
+		g.Go(func() error {
+			return singleChunkDownload(ctx, cfg, filePath, subChunk, subChunkIndex, progressChan, limiter)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// 合并子块
+	tmpFilePath := fmt.Sprintf("%s.part%d", filePath, chunkIndex)
+	destFile, err := os.OpenFile(tmpFilePath, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %v", err)
+	}
+	defer destFile.Close()
+
+	for i, subChunk := range subChunks {
+		subChunkPath := fmt.Sprintf("%s.part%d.%d", filePath, chunkIndex, i)
+		subFile, err := os.Open(subChunkPath)
+		if err != nil {
+			return fmt.Errorf("failed to open subchunk file: %v", err)
+		}
+
+		_, err = io.Copy(destFile, subFile)
+		subFile.Close()
+		os.Remove(subChunkPath)
+
+		if err != nil {
+			return fmt.Errorf("failed to copy subchunk file: %v", err)
+		}
+	}
+
+	return nil
 }
 
 func createCustomHTTPClient(cfg *Config) *http.Client {
