@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"gopkg.in/ini.v1"
 	"io"
 	"log"
 	"net"
@@ -14,152 +14,274 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
+	"gopkg.in/ini.v1"
 )
+
+const (
+	defaultConnections = 4
+	defaultBufferSize  = 32 * 1024
+	maxRetries         = 3
+	retryDelay         = 5 * time.Second
+)
+
+type Config struct {
+	URL          string
+	Connections  int
+	DownloadPath string
+	LockIP       string
+	LockPort     string
+	MaxSpeed     int64 // 最大下载速度（字节/秒）
+}
+
+type ChunkInfo struct {
+	Start      int64
+	End        int64
+	Downloaded int64
+}
 
 func main() {
 	configPath := flag.String("c", "config.ini", "Path to the configuration file")
 	flag.Parse()
 
-	cfg, err := ini.Load(*configPath)
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
-		fmt.Printf("Fail to read file: %v", err)
-		log.Fatal(err)
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Load configurations
-	downloadURL := cfg.Section("Download").Key("url").String()
-	connections := cfg.Section("Download").Key("connections").MustInt(4)
-	downloadPath := cfg.Section("Download").Key("download_path").String()
-	lockIP := cfg.Section("Download").Key("lock_ip").String()
-	lockPort := cfg.Section("Download").Key("lock_port").String()
-
-	if downloadURL == "" {
-		log.Fatal("Download URL cannot be empty")
-	}
-
-	// Determine download directory
-	if downloadPath == "" {
-		downloadPath = "."
-	}
-
-	// Parse URL to get the file name
-	parsedURL, err := url.Parse(downloadURL)
-	if err != nil {
-		log.Fatalf("Invalid URL: %v", err)
-	}
-	fileName := filepath.Base(parsedURL.Path)
-	if fileName == "" {
-		log.Fatalf("Cannot determine file name from URL: %s", downloadURL)
-	}
-	filePath := filepath.Join(downloadPath, fileName)
-
-	// Create the download path if it doesn't exist
-	if _, err := os.Stat(downloadPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(downloadPath, 0755); err != nil {
-			log.Fatalf("Failed to create download directory: %v", err)
-		}
-	}
-
-	// Start the download
-	err = downloadFile(downloadURL, filePath, connections, lockIP, lockPort)
+	err = downloadFile(cfg)
 	if err != nil {
 		log.Fatalf("Download failed: %v", err)
 	}
-	fmt.Printf("Download completed: %s\n", filePath)
 }
 
-func downloadFile(url, filePath string, connections int, lockIP, lockPort string) error {
-	resp, err := http.Head(url)
+func loadConfig(path string) (*Config, error) {
+	iniCfg, err := ini.Load(path)
 	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned non-200 status: %v", resp.Status)
+		return nil, fmt.Errorf("fail to read file: %v", err)
 	}
 
-	size, err := strconv.Atoi(resp.Header.Get("Content-Length"))
-	if err != nil {
-		return fmt.Errorf("failed to get content length: %v", err)
+	cfg := &Config{
+		URL:          iniCfg.Section("Download").Key("url").String(),
+		Connections:  iniCfg.Section("Download").Key("connections").MustInt(defaultConnections),
+		DownloadPath: iniCfg.Section("Download").Key("download_path").String(),
+		LockIP:       iniCfg.Section("Download").Key("lock_ip").String(),
+		LockPort:     iniCfg.Section("Download").Key("lock_port").String(),
+		MaxSpeed:     iniCfg.Section("Download").Key("max_speed").MustInt64(0),
 	}
 
-	chunkSize := size / connections
+	if cfg.URL == "" {
+		return nil, fmt.Errorf("download URL cannot be empty")
+	}
+
+	if cfg.DownloadPath == "" {
+		cfg.DownloadPath = "."
+	}
+
+	return cfg, nil
+}
+
+func downloadFile(cfg *Config) error {
+	parsedURL, err := url.Parse(cfg.URL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %v", err)
+	}
+
+	fileName := filepath.Base(parsedURL.Path)
+	if fileName == "" {
+		return fmt.Errorf("cannot determine file name from URL: %s", cfg.URL)
+	}
+
+	filePath := filepath.Join(cfg.DownloadPath, fileName)
+
+	if err := os.MkdirAll(cfg.DownloadPath, 0755); err != nil {
+		return fmt.Errorf("failed to create download directory: %v", err)
+	}
+
+	size, supportsRanges, err := getFileInfo(cfg.URL)
+	if err != nil {
+		return fmt.Errorf("failed to get file info: %v", err)
+	}
+
+	if !supportsRanges {
+		cfg.Connections = 1
+	}
+
+	chunks := calculateChunks(size, cfg.Connections)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	progress := make([]int, connections)
-	tmpFiles := make([]*os.File, connections)
+	g, ctx := errgroup.WithContext(ctx)
+
+	progressChan := make(chan int64, cfg.Connections)
+	go displayProgress(progressChan, size)
+
+	limiter := rate.NewLimiter(rate.Limit(cfg.MaxSpeed), int(cfg.MaxSpeed))
+
+	for i, chunk := range chunks {
+		i, chunk := i, chunk
+		g.Go(func() error {
+			return downloadChunk(ctx, cfg, filePath, chunk, i, progressChan, limiter)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("download failed: %v", err)
+	}
+
+	if err := mergeChunks(filePath, chunks); err != nil {
+		return fmt.Errorf("failed to merge chunks: %v", err)
+	}
+
+	if err := verifyFile(filePath); err != nil {
+		return fmt.Errorf("file verification failed: %v", err)
+	}
+
+	fmt.Printf("\nDownload completed: %s\n", filePath)
+	return nil
+}
+
+func getFileInfo(url string) (size int64, supportsRanges bool, err error) {
+	resp, err := http.Head(url)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		size, err = strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+		if err == nil && size > 0 {
+			supportsRanges = resp.Header.Get("Accept-Ranges") == "bytes"
+			return size, supportsRanges, nil
+		}
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, false, err
+	}
+
+	req.Header.Set("Range", "bytes=0-1")
+
+	client := &http.Client{}
+	resp, err = client.Do(req)
+	if err != nil {
+		return 0, false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusPartialContent {
+		supportsRanges = true
+		contentRange := resp.Header.Get("Content-Range")
+		if contentRange != "" {
+			parts := strings.Split(contentRange, "/")
+			if len(parts) == 2 {
+				size, err = strconv.ParseInt(parts[1], 10, 64)
+				if err == nil {
+					return size, supportsRanges, nil
+				}
+			}
+		}
+	} else if resp.StatusCode == http.StatusOK {
+		supportsRanges = false
+		size = resp.ContentLength
+		return size, supportsRanges, nil
+	}
+
+	return 0, false, fmt.Errorf("unable to determine file size")
+}
+
+func calculateChunks(size int64, connections int) []ChunkInfo {
+	chunks := make([]ChunkInfo, connections)
+	chunkSize := size / int64(connections)
 
 	for i := 0; i < connections; i++ {
-		start := i * chunkSize
-		end := start + chunkSize - 1
+		chunks[i].Start = int64(i) * chunkSize
 		if i == connections-1 {
-			end = size - 1
+			chunks[i].End = size - 1
+		} else {
+			chunks[i].End = chunks[i].Start + chunkSize - 1
 		}
+	}
 
-		tmpFile, err := os.Create(fmt.Sprintf("%s.part%d", filePath, i))
-		if err != nil {
-			return err
-		}
-		tmpFiles[i] = tmpFile
+	return chunks
+}
 
-		wg.Add(1)
-		go func(i, start, end int) {
-			defer wg.Done()
+func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk ChunkInfo, chunkIndex int, progressChan chan<- int64, limiter *rate.Limiter) error {
+	tmpFilePath := fmt.Sprintf("%s.part%d", filePath, chunkIndex)
+	tmpFile, err := os.OpenFile(tmpFilePath, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %v", err)
+	}
+	defer tmpFile.Close()
 
-			req, err := http.NewRequest("GET", url, nil)
+	for retry := 0; retry < maxRetries; retry++ {
+		err = func() error {
+			req, err := http.NewRequestWithContext(ctx, "GET", cfg.URL, nil)
 			if err != nil {
-				log.Fatalf("Failed to create request: %v", err)
+				return fmt.Errorf("failed to create request: %v", err)
 			}
-			req = req.WithContext(ctx)
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 
-			client := createCustomHTTPClient(lockIP, lockPort, url)
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunk.Start+chunk.Downloaded, chunk.End))
+
+			client := createCustomHTTPClient(cfg.LockIP, cfg.LockPort, cfg.URL)
 			resp, err := client.Do(req)
 			if err != nil {
-				log.Fatalf("Failed to download chunk %d: %v", i, err)
+				return fmt.Errorf("failed to send request: %v", err)
 			}
 			defer resp.Body.Close()
 
-			buf := make([]byte, 32*1024)
+			if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("server returned non-200 status: %v", resp.Status)
+			}
+
+			_, err = tmpFile.Seek(chunk.Downloaded, io.SeekStart)
+			if err != nil {
+				return fmt.Errorf("failed to seek in temp file: %v", err)
+			}
+
+			buf := make([]byte, defaultBufferSize)
 			for {
-				n, err := resp.Body.Read(buf)
-				if n > 0 {
-					mu.Lock()
-					tmpFiles[i].Write(buf[:n])
-					progress[i] += n
-					mu.Unlock()
-					printProgress(progress, size)
-				}
-				if err != nil {
-					if err == io.EOF {
-						break
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					n, err := resp.Body.Read(buf)
+					if n > 0 {
+						if err := limiter.WaitN(ctx, n); err != nil {
+							return fmt.Errorf("rate limit error: %v", err)
+						}
+
+						_, err := tmpFile.Write(buf[:n])
+						if err != nil {
+							return fmt.Errorf("failed to write to temp file: %v", err)
+						}
+
+						chunk.Downloaded += int64(n)
+						progressChan <- int64(n)
 					}
-					log.Fatalf("Failed to read chunk %d: %v", i, err)
+					if err != nil {
+						if err == io.EOF {
+							return nil
+						}
+						return fmt.Errorf("failed to read chunk: %v", err)
+					}
 				}
 			}
-		}(i, start, end)
+		}()
+
+		if err == nil {
+			break
+		}
+
+		if retry < maxRetries-1 {
+			log.Printf("Chunk %d download failed, retrying in %v: %v", chunkIndex, retryDelay, err)
+			time.Sleep(retryDelay)
+		}
 	}
 
-	wg.Wait()
-
-	// Merge files
-	destFile, err := os.Create(filePath)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	for i := 0; i < connections; i++ {
-		tmpFiles[i].Seek(0, 0)
-		io.Copy(destFile, tmpFiles[i])
-		tmpFiles[i].Close()
-		os.Remove(tmpFiles[i].Name())
-	}
-
-	return nil
+	return err
 }
 
 func createCustomHTTPClient(lockIP, lockPort, rawURL string) *http.Client {
@@ -201,20 +323,69 @@ func createCustomHTTPClient(lockIP, lockPort, rawURL string) *http.Client {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
-	client := &http.Client{
-		Transport: transport,
-	}
-	return client
+	return &http.Client{Transport: transport}
 }
 
-func printProgress(progress []int, totalSize int) {
-	completed := 0
-	for _, p := range progress {
-		completed += p
+func mergeChunks(filePath string, chunks []ChunkInfo) error {
+	destFile, err := os.Create(filePath)
+	if err != nil {
+		return err
 	}
-	percent := float64(completed) / float64(totalSize) * 100
-	fmt.Printf("\rProgress: %.2f%%", percent)
-	if percent >= 100 {
-		fmt.Println("\nDownload complete.")
+	defer destFile.Close()
+
+	for i := range chunks {
+		tmpFilePath := fmt.Sprintf("%s.part%d", filePath, i)
+		tmpFile, err := os.Open(tmpFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to open temp file: %v", err)
+		}
+
+		_, err = io.Copy(destFile, tmpFile)
+		tmpFile.Close()
+		os.Remove(tmpFilePath)
+
+		if err != nil {
+			return fmt.Errorf("failed to copy temp file: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func verifyFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file for verification: %v", err)
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("failed to calculate file hash: %v", err)
+	}
+
+	sum := hash.Sum(nil)
+	fmt.Printf("File SHA256: %x\n", sum)
+
+	return nil
+}
+
+func displayProgress(progressChan <-chan int64, totalSize int64) {
+	var downloaded int64
+	start := time.Now()
+
+	for {
+		select {
+		case n, ok := <-progressChan:
+			if !ok {
+				return
+			}
+			downloaded += n
+			percent := float64(downloaded) / float64(totalSize) * 100
+			elapsed := time.Since(start)
+			speed := float64(downloaded) / elapsed.Seconds() / 1024 / 1024
+
+			fmt.Printf("\rProgress: %.2f%% | Speed: %.2f MB/s", percent, speed)
+		}
 	}
 }
