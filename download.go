@@ -141,7 +141,7 @@ func downloadFile(cfg *Config) error {
 	}
 
 	for i := range chunks {
-		i := i
+		i := i // 使用局部变量避免闭包问题
 		g.Go(func() error {
 			for !chunks[i].Complete {
 				err := downloadChunk(ctx, cfg, filePath, &chunks[i], i, progressChan, limiter)
@@ -368,8 +368,8 @@ func splitChunk(chunk *ChunkInfo, minChunkSize int64) []*ChunkInfo {
 func downloadSubChunks(ctx context.Context, cfg *Config, filePath string, subChunks []*ChunkInfo, chunkIndex int, progressChan chan<- int64, limiter *rate.Limiter) error {
 	g, ctx := errgroup.WithContext(ctx)
 
-	for i, subChunk := range subChunks {
-		subChunk := subChunk
+	for i := range subChunks {
+		subChunk := subChunks[i] // 使用局部变量避免闭包问题
 		g.Go(func() error {
 			return singleChunkDownload(ctx, cfg, filePath, subChunk, chunkIndex, progressChan, limiter)
 		})
@@ -387,7 +387,7 @@ func downloadSubChunks(ctx context.Context, cfg *Config, filePath string, subChu
 	}
 	defer destFile.Close()
 
-	for i, subChunk := range subChunks {
+	for i := range subChunks {
 		subChunkPath := fmt.Sprintf("%s.part%d.%d", filePath, chunkIndex, i)
 		subFile, err := os.Open(subChunkPath)
 		if err != nil {
