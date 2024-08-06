@@ -453,6 +453,8 @@ func mergeChunks(filePath string, chunks []ChunkInfo) error {
 	}
 	defer destFile.Close()
 
+	buf := make([]byte, defaultChunkSize) // 使用 10MB 缓冲区
+
 	for _, chunk := range chunks {
 		if !chunk.Complete {
 			return fmt.Errorf("chunk %d-%d is not complete", chunk.Start, chunk.End)
@@ -464,13 +466,24 @@ func mergeChunks(filePath string, chunks []ChunkInfo) error {
 			return fmt.Errorf("failed to open temp file: %v", err)
 		}
 
-		_, err = io.Copy(destFile, tmpFile)
+		for {
+			n, err := tmpFile.Read(buf)
+			if n > 0 {
+				if _, err := destFile.Write(buf[:n]); err != nil {
+					tmpFile.Close()
+					return fmt.Errorf("failed to write to destination file: %v", err)
+				}
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				tmpFile.Close()
+				return fmt.Errorf("failed to read from temp file: %v", err)
+			}
+		}
 		tmpFile.Close()
 		os.Remove(tmpFilePath)
-
-		if err != nil {
-			return fmt.Errorf("failed to copy temp file: %v", err)
-		}
 	}
 
 	os.Remove(filePath + ".progress")
