@@ -37,7 +37,10 @@ type Config struct {
 	DownloadPath string
 	LockIP       string
 	LockPort     string
-	MaxSpeed     int64 // 最大下载速度（字节/秒）
+	MaxSpeed     int64
+	Burst        int
+	UserAgent    string
+	Referer      string
 }
 
 type ChunkInfo struct {
@@ -76,6 +79,9 @@ func loadConfig(path string) (*Config, error) {
 		LockIP:       iniCfg.Section("Download").Key("lock_ip").String(),
 		LockPort:     iniCfg.Section("Download").Key("lock_port").String(),
 		MaxSpeed:     iniCfg.Section("Download").Key("max_speed").MustInt64(0),
+		Burst:        iniCfg.Section("Download").Key("burst").MustInt(defaultBufferSize),
+		UserAgent:    iniCfg.Section("Download").Key("user_agent").String(),
+		Referer:      iniCfg.Section("Download").Key("referer").String(),
 	}
 
 	if cfg.URL == "" {
@@ -106,7 +112,7 @@ func downloadFile(cfg *Config) error {
 		return fmt.Errorf("failed to create download directory: %v", err)
 	}
 
-	size, supportsRanges, err := getFileInfo(cfg.URL)
+	size, supportsRanges, err := getFileInfo(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get file info: %v", err)
 	}
@@ -128,7 +134,10 @@ func downloadFile(cfg *Config) error {
 	progressChan := make(chan int64, cfg.Connections)
 	go displayProgress(progressChan, size)
 
-	limiter := rate.NewLimiter(rate.Limit(cfg.MaxSpeed), int(cfg.MaxSpeed))
+	var limiter *rate.Limiter
+	if cfg.MaxSpeed > 0 {
+		limiter = rate.NewLimiter(rate.Limit(cfg.MaxSpeed), cfg.Burst)
+	}
 
 	for i := range chunks {
 		i := i
@@ -167,8 +176,16 @@ func downloadFile(cfg *Config) error {
 	return nil
 }
 
-func getFileInfo(url string) (size int64, supportsRanges bool, err error) {
-	resp, err := http.Head(url)
+func getFileInfo(cfg *Config) (size int64, supportsRanges bool, err error) {
+	client := createCustomHTTPClient(cfg)
+	req, err := http.NewRequest("HEAD", cfg.URL, nil)
+	if err != nil {
+		return 0, false, err
+	}
+
+	setRequestHeaders(req, cfg)
+
+	resp, err := client.Do(req)
 	if err == nil && resp.StatusCode == http.StatusOK {
 		size, err = strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
 		if err == nil && size > 0 {
@@ -177,14 +194,14 @@ func getFileInfo(url string) (size int64, supportsRanges bool, err error) {
 		}
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err = http.NewRequest("GET", cfg.URL, nil)
 	if err != nil {
 		return 0, false, err
 	}
 
+	setRequestHeaders(req, cfg)
 	req.Header.Set("Range", "bytes=0-1")
 
-	client := &http.Client{}
 	resp, err = client.Do(req)
 	if err != nil {
 		return 0, false, err
@@ -236,14 +253,15 @@ func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *Chu
 	}
 	defer tmpFile.Close()
 
+	client := createCustomHTTPClient(cfg)
 	req, err := http.NewRequestWithContext(ctx, "GET", cfg.URL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
 
+	setRequestHeaders(req, cfg)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunk.Start+chunk.Downloaded, chunk.End))
 
-	client := createCustomHTTPClient(cfg.LockIP, cfg.LockPort, cfg.URL)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %v", err)
@@ -270,8 +288,10 @@ func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *Chu
 		default:
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
-				if err := limiter.WaitN(ctx, n); err != nil {
-					return fmt.Errorf("rate limit error: %v", err)
+				if limiter != nil {
+					if err := limiter.WaitN(ctx, n); err != nil {
+						return fmt.Errorf("rate limit error: %v", err)
+					}
 				}
 
 				_, err := writer.Write(buf[:n])
@@ -293,46 +313,49 @@ func downloadChunk(ctx context.Context, cfg *Config, filePath string, chunk *Chu
 	}
 }
 
-func createCustomHTTPClient(lockIP, lockPort, rawURL string) *http.Client {
+func createCustomHTTPClient(cfg *Config) *http.Client {
 	dialContext := (&net.Dialer{}).DialContext
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if lockIP != "" {
-				addr = lockIP + ":" + lockPort
-			} else {
-				host, port, err := net.SplitHostPort(addr)
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				host = addr
+				port = ""
+			}
+
+			if cfg.LockIP != "" {
+				host = cfg.LockIP
+			}
+
+			if cfg.LockPort != "" {
+				port = cfg.LockPort
+			} else if port == "" {
+				u, err := url.Parse(cfg.URL)
 				if err != nil {
-					host = addr
-					if port == "" {
-						u, err := url.Parse(rawURL)
-						if err != nil {
-							return nil, err
-						}
-						if u.Scheme == "https" {
-							port = "443"
-						} else {
-							port = "80"
-						}
-					}
-					addr = net.JoinHostPort(host, port)
+					return nil, err
 				}
-				if host == "" {
-					ips, err := net.LookupIP(host)
-					if err != nil {
-						return nil, err
-					}
-					if len(ips) == 0 {
-						return nil, fmt.Errorf("no IPs found for host: %s", host)
-					}
-					addr = ips[0].String() + ":" + port
+				if u.Scheme == "https" {
+					port = "443"
+				} else {
+					port = "80"
 				}
 			}
-			return dialContext(ctx, network, addr)
+
+			return dialContext(ctx, network, net.JoinHostPort(host, port))
 		},
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
 	return &http.Client{Transport: transport}
+}
+
+func setRequestHeaders(req *http.Request, cfg *Config) {
+	if cfg.UserAgent != "" {
+		req.Header.Set("User-Agent", cfg.UserAgent)
+	}
+	if cfg.Referer != "" {
+		req.Header.Set("Referer", cfg.Referer)
+	}
 }
 
 func verifyChunk(filePath string, chunk *ChunkInfo, chunkIndex int) error {
@@ -439,6 +462,7 @@ func displayProgress(progressChan <-chan int64, totalSize int64) {
 		select {
 		case n, ok := <-progressChan:
 			if !ok {
+				fmt.Println("\nDownload complete.")
 				return
 			}
 			downloaded += n
