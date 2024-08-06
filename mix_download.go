@@ -185,6 +185,9 @@ func downloadFile(cfg *Config) error {
 				}
 				chunk.Complete = true
 				saveProgress(filePath, chunks)
+
+				// 重新添加未完成的任务
+				chunkChan <- chunk
 			}
 			return nil
 		})
