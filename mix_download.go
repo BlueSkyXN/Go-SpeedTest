@@ -32,7 +32,7 @@ const (
 	maxRetries         = 3
 	retryDelay         = 5 * time.Second
 	defaultChunkSize   int64 = 10 * 1024 * 1024 // 10MB
-	minChunkSize       int64 = 200 * 1024       // 200KB
+	minChunkSize       int64 = 100 * 1024       // 100KB
 )
 
 type Config struct {
